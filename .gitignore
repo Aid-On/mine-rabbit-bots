@@ -15,3 +15,6 @@ notes/*.tmp
 npm-debug.log*
 yarn-error.log*
 /.claude/
+
+# Secrets / local env
+.env
