@@ -3,12 +3,22 @@ import { createBot } from 'mineflayer';
 import pathfinderPlugin from 'mineflayer-pathfinder';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
+import './env.js';
 
 const { pathfinder, Movements, goals } = pathfinderPlugin;
 
-const host = process.env.MINEFLYER_HOST || 'localhost';
-const port = Number(process.env.MINEFLYER_PORT || 25565);
+// Support host specified as "host" or "host:port"
+const rawHost = process.env.MINEFLYER_HOST || '127.0.0.1';
+let host = rawHost;
+let hostPortFromHost = null;
+if (rawHost.includes(':')) {
+  const parts = rawHost.split(':');
+  host = parts[0];
+  hostPortFromHost = parts[1];
+}
+const port = Number(process.env.MINEFLYER_PORT || hostPortFromHost || 25565);
 const username = process.env.MINEFLYER_USERNAME || 'pino';
+console.log(`[${username}] 接続先: ${host}:${port}`);
 const versionEnv = process.env.MINEFLYER_VERSION;
 const version = versionEnv === undefined || versionEnv === '' ? false : versionEnv;
 
@@ -34,7 +44,9 @@ bot.once('spawn', () => {
 
   const mcData = minecraftData(bot.version);
   const defaultMove = new Movements(bot, mcData);
-  bot.pathfinder.setMovements(defaultMove);
+  if (bot.pathfinder?.setMovements) {
+    bot.pathfinder.setMovements(defaultMove);
+  }
 });
 
 const state = {
@@ -56,7 +68,9 @@ const startFollowing = (target) => {
     const player = bot.players[state.followTarget];
     if (player?.entity) {
       const pos = player.entity.position;
-      bot.pathfinder.setGoal(new goals.GoalNear(pos.x, pos.y, pos.z, 2));
+      if (bot.pathfinder?.setGoal) {
+        bot.pathfinder.setGoal(new goals.GoalNear(pos.x, pos.y, pos.z, 2));
+      }
       return;
     }
 
@@ -68,7 +82,9 @@ const startFollowing = (target) => {
 const stopFollowing = () => {
   state.followTarget = null;
   clearFollowTask();
-  bot.pathfinder.setGoal(null);
+  if (bot.pathfinder?.setGoal) {
+    bot.pathfinder.setGoal(null);
+  }
 };
 
 const commandHandlers = new Map();
@@ -81,7 +97,9 @@ commandHandlers.set('come', ({ sender }) => {
   const player = bot.players[sender];
   if (player?.entity) {
     const { x, y, z } = player.entity.position;
-    bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 1));
+    if (bot.pathfinder?.setGoal) {
+      bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 1));
+    }
   }
 });
 

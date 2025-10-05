@@ -1,14 +1,24 @@
 #!/usr/bin/env node
 import { spawn } from 'child_process';
+import './src/env.js';
 
 const bots = ['wim', 'pino', 'yuki'];
 
-const host = process.env.MINEFLYER_HOST || '127.0.0.1';
-const port = process.env.MINEFLYER_PORT || '25565';
+// Allow MINEFLYER_HOST to optionally include ":port"
+const rawHost = process.env.MINEFLYER_HOST || '127.0.0.1';
+let host = rawHost;
+let hostPortFromHost = '';
+if (rawHost.includes(':')) {
+  const parts = rawHost.split(':');
+  host = parts[0];
+  hostPortFromHost = parts[1];
+}
+const port = process.env.MINEFLYER_PORT || hostPortFromHost || '25565';
 const version = process.env.MINEFLYER_VERSION || '';
 const serverPath = process.env.SERVER_PATH || '../craftsman';
 
 console.log(`Starting ${bots.length} bots...`);
+console.log(`Target => host: ${host}, port: ${port}`);
 
 const startBot = (botName) => {
   const env = {
