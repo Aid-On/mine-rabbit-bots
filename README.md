@@ -59,6 +59,36 @@ Bot はチャットで `!ping` と話しかけると `pong` と返答します�
 - 互換（ホストにポートを含めて指定）
   ```ini
   MINEFLYER_HOST=192.168.40.254:25565
-  ```
+ ```
 
 いずれの形式も読み込まれます。`.env` は既存の環境変数を上書きしません。
+
+## チャットコマンド（抜粋）
+
+- `ping`: 生存確認（`pong` を返答）
+- `come`: 呼び出し位置へ移動
+- `follow`: 話しかけたプレイヤーを追従
+- `stop`: 追従を停止
+- `jump`: その場でジャンプ
+- `items` / `inv`: Bot のインベントリ一覧を表示（`name x個数` を集計して出力）
+- `build <blockName> [dir]`: 目の前などにブロックを設置（`dir`: `front|back|left|right`。既定は `front`）
+- `dig <blockName> [count]`: 指定ブロックを近場から `count` 個掘る（無引数の従来動作は一時停止中）
+  - 例: `dig stone 5`, `dig oak_log 2`
+  - ブロック名は Minecraft の内部名（例: `stone`, `oak_log`, `coal_ore`）
+- `mine <blockName> [count]`: `dig` のエイリアス
+- `furnace <input|fuel|take> ...`: 近くのかまどに投入・取り出し
+  - 例: `furnace input raw_iron 8`, `furnace fuel coal 8`, `furnace take output`
+  - 近くにかまどが無い場合は付近を探索し、見つかれば近づいて操作します
+
+- `craft <itemName> [count]`: 指定アイテムをクラフト
+  - 例: `craft stick 8`, `craft torch 4`
+  - 近距離に作業台（`crafting_table`）がある場合のみ使用（パス移動はしません）
+  - 材料不足や依存素材の自動作成は行いません（在庫で作れる分のみ）
+
+注意:
+- 近くに該当ブロックがない場合や、到達できない地形の場合はスキップまたは中断します。
+- ブロックがツール必須の場合は、インベントリから適切なツールに自動持ち替えして掘ります。ツール未所持の場合は破壊しません。
+### 日本語名のカスタマイズ
+- インベントリ表示の日本語名は `data/ja-items.json`（任意）で上書きできます。
+- 例: `{ "oak_planks": "オークの板材", "stick": "棒" }`
+- ファイルが無い場合は内蔵の簡易辞書と英名（displayName）を表示します。
