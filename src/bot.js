@@ -177,7 +177,7 @@ const getJaItemName = (name) => {
 };
 
 const findNearestBlockByName = (name, {
-  maxDistance = 32,
+  maxDistance = 24,  // 48 → 24 に削減
   count = 1
 } = {}) => {
   if (!mcDataGlobal) return [];
@@ -189,7 +189,7 @@ const findNearestBlockByName = (name, {
   return positions;
 };
 
-const findNearestBlocksByIds = (ids, { maxDistance = 48, count = 1 } = {}) => {
+const findNearestBlocksByIds = (ids, { maxDistance = 32, count = 1 } = {}) => {  // 48 → 32 に削減
   if (!ids || ids.length === 0) return [];
   const positions = bot.findBlocks({ matching: (b) => ids.includes(typeof b === 'number' ? b : b.id), maxDistance, count: Math.max(1, count) });
   positions.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position));
@@ -398,7 +398,7 @@ commandHandlers.set('dig', ({ args, sender }) => {
     bot.chat(`@${sender} ${blockName} を ${count} 個掘ります`);
     let mined = 0;
     for (let i = 0; i < count; i++) {
-      const [pos] = findNearestBlockByName(blockName, { maxDistance: 48, count: 1 });
+      const [pos] = findNearestBlockByName(blockName, { maxDistance: 24, count: 1 });  // 48 → 24
       if (!pos) {
         log(`近くに ${blockName} が見つかりませんでした（進捗 ${mined}/${count}）`);
         bot.chat(`@${sender} 近くに ${blockName} が見つかりません`);
@@ -408,6 +408,10 @@ commandHandlers.set('dig', ({ args, sender }) => {
         await gotoBlockAndDig(pos);
         mined += 1;
         log(`${blockName} を掘りました。進捗: ${mined}/${count}`);
+        // 2回ごとにイベントループに制御を返す
+        if (i % 2 === 0 && i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       } catch (err) {
         log(`掘削に失敗: ${err.message}`);
         bot.chat(`@${sender} 掘削に失敗: ${err.message}`);
@@ -457,13 +461,17 @@ const gatherItemByMining = async (itemName, desiredCount, opts = {}) => {
   if (!ids || ids.length === 0) throw new Error(`自動採集非対応: ${itemName}`);
 
   let obtained = 0;
-  const maxLoops = Math.max(desiredCount * 3, desiredCount + 2);
+  const maxLoops = Math.max(desiredCount * 2, desiredCount + 1);  // 3 → 2 に削減
   for (let i = 0; i < maxLoops && obtained < desiredCount; i++) {
-    const [pos] = findNearestBlocksByIds(ids, { maxDistance: opts.maxDistance || 64, count: 1 });
+    const [pos] = findNearestBlocksByIds(ids, { maxDistance: opts.maxDistance || 32, count: 1 });  // 64 → 32
     if (!pos) break;
     try {
       await gotoBlockAndDig(pos);
       obtained += 1; // 概算: 1ブロック=1個
+      // 3回ごとにイベントループに制御を返す
+      if (i % 3 === 0) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
     } catch (e) {
       log(`採集失敗: ${e.message}`);
       break;
@@ -562,7 +570,7 @@ const smeltAuto = async (outputName, desiredCount, sender) => {
   const timeoutMs = 120000; // 2分上限
   try {
     while (made < toSmelt && Date.now() - start < timeoutMs) {
-      await new Promise((res) => setTimeout(res, 1000));
+      await new Promise((res) => setTimeout(res, 2000));  // 1000ms → 2000ms に変更
       const out = furnace.outputItem();
       if (out && out.type === outDef.id) {
         const got = await furnace.takeOutput();
