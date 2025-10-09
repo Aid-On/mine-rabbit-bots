@@ -121,7 +121,6 @@ const stopFollowing = () => {
 };
 
 const commandHandlers = new Map();
-
 // 日本語アイテム名（よく使う代表的なもの）
 const jaItemNames = {
   stick: '棒',
@@ -186,6 +185,13 @@ const findNearestBlockByName = (name, {
   if (!def) return [];
   const positions = bot.findBlocks({ matching: def.id, maxDistance, count: Math.max(1, count) });
   // Sort by distance (nearest first)
+  positions.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position));
+  return positions;
+};
+
+const findNearestBlocksByIds = (ids, { maxDistance = 48, count = 1 } = {}) => {
+  if (!ids || ids.length === 0) return [];
+  const positions = bot.findBlocks({ matching: (b) => ids.includes(typeof b === 'number' ? b : b.id), maxDistance, count: Math.max(1, count) });
   positions.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position));
   return positions;
 };
@@ -415,6 +421,237 @@ commandHandlers.set('dig', ({ args, sender }) => {
 // エイリアス: `mine` でも同じ動作
 commandHandlers.set('mine', (ctx) => commandHandlers.get('dig')(ctx));
 
+// 在庫ユーティリティ
+const invCountById = (id, meta = null) => bot.inventory.count(id, meta);
+const itemNameById = (id) => mcDataGlobal?.items?.[id]?.name || String(id);
+const invCountByName = (name) => {
+  const def = mcDataGlobal?.itemsByName?.[name];
+  return def ? invCountById(def.id, null) : 0;
+};
+
+// 自動採集: アイテム→採掘すべきブロックの簡易マッピング
+const gatherSources = () => {
+  const b = mcDataGlobal?.blocksByName || {};
+  const ids = (names) => names.map((n) => b[n]?.id).filter(Boolean);
+  return {
+    // 原木類
+    oak_log: ids(['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log']),
+    // 丸石は石を掘っても得られる
+    cobblestone: ids(['cobblestone', 'stone']),
+    // 砂
+    sand: ids(['sand', 'red_sand']),
+    // 石炭
+    coal: ids(['coal_ore', 'deepslate_coal_ore']),
+    raw_iron: ids(['iron_ore', 'deepslate_iron_ore']),
+    raw_gold: ids(['gold_ore', 'deepslate_gold_ore']),
+    raw_copper: ids(['copper_ore', 'deepslate_copper_ore']),
+    clay_ball: ids(['clay']),
+    kelp: ids(['kelp'])
+  };
+};
+
+const gatherItemByMining = async (itemName, desiredCount, opts = {}) => {
+  if (!mcDataGlobal) throw new Error('データ未初期化');
+  const sources = gatherSources();
+  const ids = sources[itemName];
+  if (!ids || ids.length === 0) throw new Error(`自動採集非対応: ${itemName}`);
+
+  let obtained = 0;
+  const maxLoops = Math.max(desiredCount * 3, desiredCount + 2);
+  for (let i = 0; i < maxLoops && obtained < desiredCount; i++) {
+    const [pos] = findNearestBlocksByIds(ids, { maxDistance: opts.maxDistance || 64, count: 1 });
+    if (!pos) break;
+    try {
+      await gotoBlockAndDig(pos);
+      obtained += 1; // 概算: 1ブロック=1個
+    } catch (e) {
+      log(`採集失敗: ${e.message}`);
+      break;
+    }
+  }
+  return obtained;
+};
+
+// 製錬マッピング（出力→入力候補）
+const smeltSources = {
+  iron_ingot: ['raw_iron'],
+  gold_ingot: ['raw_gold'],
+  copper_ingot: ['raw_copper'],
+  glass: ['sand', 'red_sand'],
+  smooth_stone: ['stone'],
+  brick: ['clay_ball'],
+  dried_kelp: ['kelp'],
+  charcoal: ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log']
+};
+
+const openOrApproachFurnace = async () => {
+  let block = findNearestFurnace(6);
+  if (!block) {
+    block = findNearestFurnace(48);
+    if (block) await gotoBlock(block.position);
+  }
+  if (!block) throw new Error('近くにかまどが見つかりません');
+  return await bot.openFurnace(block);
+};
+
+const ensureFuelInFurnace = async (furnace, itemsToSmelt, sender) => {
+  // 石炭/木炭 優先。1燃料で8個を目安
+  const units = Math.max(1, Math.ceil(itemsToSmelt / 8));
+  const tryPut = async (name, needUnits) => {
+    const def = mcDataGlobal.itemsByName[name];
+    if (!def) return 0;
+    const have = invCountById(def.id, null);
+    if (have <= 0) return 0;
+    const put = Math.min(needUnits, have);
+    await furnace.putFuel(def.id, null, put);
+    return put;
+  };
+
+  let remaining = units;
+  remaining -= await tryPut('coal', remaining);
+  if (remaining > 0) remaining -= await tryPut('charcoal', remaining);
+
+  if (remaining > 0) {
+    // 石炭を採集して補充
+    if (sender) bot.chat(`@${sender} 燃料不足: 石炭 x${remaining} を採集`);
+    const got = await gatherItemByMining('coal', remaining);
+    if (got > 0) remaining -= await tryPut('coal', got);
+  }
+
+  if (remaining > 0) throw new Error('燃料不足');
+};
+
+const smeltAuto = async (outputName, desiredCount, sender) => {
+  outputName = outputName.replace(/^minecraft:/, '').toLowerCase();
+  const outDef = mcDataGlobal.itemsByName[outputName];
+  if (!outDef) throw new Error(`未知のアイテム: ${outputName}`);
+  const have = invCountById(outDef.id, null);
+  if (have >= desiredCount) return 0;
+  let remain = desiredCount - have;
+
+  const inputs = smeltSources[outputName] || [];
+  if (inputs.length === 0) throw new Error(`自動製錬非対応: ${outputName}`);
+
+  // 入力候補の中から所持数があるものを選ぶ。なければ採集
+  let inputName = inputs.find((n) => invCountByName(n) > 0) || null;
+  if (!inputName) {
+    // 採集対応があれば集める
+    const candidate = inputs.find((n) => gatherSources()[n]);
+    if (candidate) {
+      if (sender) bot.chat(`@${sender} 材料採集（製錬用）: ${getJaItemName(candidate)} x${remain}`);
+      await gatherItemByMining(candidate, remain);
+      inputName = candidate;
+    }
+  }
+  if (!inputName) throw new Error('材料がありません');
+
+  const inDef = mcDataGlobal.itemsByName[inputName];
+  let inHave = invCountById(inDef.id, null);
+  if (inHave <= 0) throw new Error('材料がありません');
+
+  // かまどを開き、燃料を確保し、投入
+  const furnace = await openOrApproachFurnace();
+  const toSmelt = Math.min(inHave, remain);
+  await ensureFuelInFurnace(furnace, toSmelt, sender);
+  await furnace.putInput(inDef.id, null, toSmelt);
+  if (sender) bot.chat(`@${sender} 製錬開始: ${getJaItemName(inputName)} → ${getJaItemName(outputName)} x${toSmelt}`);
+
+  // 進捗監視: 出来上がりを取り出し、目標数まで繰り返し
+  let made = 0;
+  const start = Date.now();
+  const timeoutMs = 120000; // 2分上限
+  try {
+    while (made < toSmelt && Date.now() - start < timeoutMs) {
+      await new Promise((res) => setTimeout(res, 1000));
+      const out = furnace.outputItem();
+      if (out && out.type === outDef.id) {
+        const got = await furnace.takeOutput();
+        made += got?.count || 0;
+      }
+      const inp = furnace.inputItem();
+      if (!inp) {
+        // 入力が尽きたらループ継続して出力取り切り
+      }
+    }
+  } finally {
+    furnace.close();
+  }
+
+  return made;
+};
+
+// 再帰クラフト（自動採集付）
+const craftWithAuto = async (itemId, desiredCount, sender, depth = 0) => {
+  if (!mcDataGlobal) throw new Error('データ未初期化');
+  if (depth > 4) throw new Error('依存が深すぎます');
+
+  // すでに足りていれば終了
+  if (invCountById(itemId, null) >= desiredCount) return true;
+
+  // 近距離の作業台（あれば使用）
+  const tablePos = findNearestBlockByName('crafting_table', { maxDistance: 6, count: 1 })[0];
+  const tableBlock = tablePos ? bot.blockAt(tablePos) : null;
+
+  // 作れるレシピ候補
+  const allCandidates = [
+    ...bot.recipesAll(itemId, null, null),
+    ...(tableBlock ? bot.recipesAll(itemId, null, tableBlock) : [])
+  ];
+  if (allCandidates.length === 0) throw new Error('レシピがありません');
+  const recipe = allCandidates.find((r) => !r.requiresTable) || allCandidates[0];
+
+  // 必要材料を確保
+  const once = recipe.result?.count || 1;
+  const times = Math.max(1, Math.ceil(desiredCount / once));
+  for (const d of recipe.delta) {
+    if (d.count >= 0) continue;
+    const needTotal = -(d.count) * times;
+    const needName = itemNameById(d.id);
+    let guard = 0;
+    while (invCountById(d.id, d.metadata) < needTotal) {
+      if (++guard > 8) throw new Error(`材料の確保に失敗: ${getJaItemName(needName)}`);
+      const have = invCountById(d.id, d.metadata);
+      const missing = Math.max(0, needTotal - have);
+      // 1) まずクラフトで増やせるなら増やす（再帰）
+      const subRecipes = [
+        ...bot.recipesAll(d.id, d.metadata ?? null, null),
+        ...(tableBlock ? bot.recipesAll(d.id, d.metadata ?? null, tableBlock) : [])
+      ];
+      if (subRecipes.length > 0) {
+        if (sender) bot.chat(`@${sender} 材料不足: ${getJaItemName(needName)} x${missing} → 作成試行`);
+        const ok = await craftWithAuto(d.id, needTotal, sender, depth + 1);
+        if (!ok) throw new Error(`材料作成に失敗: ${getJaItemName(needName)}`);
+        continue;
+      }
+      // 2) 製錬で得られる場合は製錬
+      const outKey = mcDataGlobal.items[d.id]?.name;
+      if (outKey && smeltSources[outKey]) {
+        if (sender) bot.chat(`@${sender} 材料不足: ${getJaItemName(outKey)} x${missing} → 製錬`);
+        const made = await smeltAuto(outKey, missing, sender);
+        if (made <= 0) throw new Error(`製錬に失敗: ${getJaItemName(outKey)}`);
+        continue;
+      }
+      // 3) 採集
+      try {
+        if (sender) bot.chat(`@${sender} 材料採集: ${getJaItemName(needName)} x${missing}`);
+        const got = await gatherItemByMining(needName, missing);
+        if (got <= 0) throw new Error(`採集できませんでした: ${getJaItemName(needName)}`);
+      } catch (e) {
+        throw new Error(e.message || `採集失敗: ${getJaItemName(needName)}`);
+      }
+    }
+  }
+
+  // 必要材料を揃えたのでクラフト実行
+  // 作業台が必要なら近づく
+  if (recipe.requiresTable && tablePos) await gotoBlock(tablePos);
+
+  for (let i = 0; i < times; i++) {
+    await bot.craft(recipe, 1, recipe.requiresTable ? (tableBlock || null) : null);
+  }
+  return invCountById(itemId, null) >= desiredCount;
+};
+
 // クラフト: craft <itemName> [count]
 commandHandlers.set('craft', ({ args, sender }) => {
   if (!mcDataGlobal) {
@@ -492,6 +729,82 @@ commandHandlers.set('craft', ({ args, sender }) => {
     }
   })();
 });
+
+// 自動採集つきクラフト: craft+ / craftauto <itemName> [count]
+commandHandlers.set('craft+', ({ args, sender }) => commandHandlers.get('craftauto')({ args, sender }));
+commandHandlers.set('craftauto', ({ args, sender }) => {
+  if (!mcDataGlobal) {
+    if (sender) bot.chat(`@${sender} データ未初期化です。少し待ってから再試行してください`);
+    return;
+  }
+  if (!args || args.length === 0) {
+    if (sender) bot.chat(`@${sender} 使用方法: craftauto <itemName> [count]`);
+    return;
+  }
+  const a0 = String(args[0]).toLowerCase();
+  const a1 = args[1] !== undefined ? String(args[1]).toLowerCase() : undefined;
+  const a0num = Number(a0);
+  const a1num = a1 !== undefined ? Number(a1) : NaN;
+  let itemName = isNaN(a0num) ? a0 : (a1 ?? '');
+  let desiredCount = !isNaN(a0num) ? a0num : (!isNaN(a1num) ? a1num : 1);
+  itemName = itemName.replace(/^minecraft:/, '').replace(/\s+/g, '_');
+  desiredCount = Math.max(1, Math.min(64, Number(desiredCount)));
+
+  const itemDef = mcDataGlobal.itemsByName[itemName];
+  if (!itemDef) {
+    log(`不明なアイテム名: ${itemName}`);
+    if (sender) bot.chat(`@${sender} 不明なアイテム: ${itemName}`);
+    return;
+  }
+
+  (async () => {
+    try {
+      if (sender) bot.chat(`@${sender} 自動採集つきクラフト: ${itemName} x${desiredCount}`);
+      const ok = await craftWithAuto(itemDef.id, desiredCount, sender, 0);
+      if (ok) {
+        if (sender) bot.chat(`@${sender} クラフト完了: ${itemName} x${desiredCount}`);
+      } else {
+        if (sender) bot.chat(`@${sender} 作れませんでした: ${itemName}`);
+      }
+    } catch (e) {
+      log(`クラフト(auto)失敗: ${e.message}`);
+      if (sender) bot.chat(`@${sender} 失敗: ${e.message}`);
+    }
+  })();
+});
+
+// 製錬コマンド: smeltauto / smelt <outputName> [count]
+commandHandlers.set('smeltauto', ({ args, sender }) => {
+  if (!args || args.length === 0) {
+    if (sender) bot.chat(`@${sender} 使用方法: smeltauto <itemName> [count]`);
+    return;
+  }
+  const a0 = String(args[0]).toLowerCase();
+  const a1 = args[1] !== undefined ? String(args[1]).toLowerCase() : undefined;
+  const a0num = Number(a0);
+  const a1num = a1 !== undefined ? Number(a1) : NaN;
+  let itemName = isNaN(a0num) ? a0 : (a1 ?? '');
+  let count = !isNaN(a0num) ? a0num : (!isNaN(a1num) ? a1num : 1);
+  itemName = itemName.replace(/^minecraft:/, '').replace(/\s+/g, '_');
+  count = Math.max(1, Math.min(64, Number(count)));
+
+  (async () => {
+    try {
+      if (sender) bot.chat(`@${sender} 自動製錬: ${itemName} x${count}`);
+      const ok = await smeltAuto(itemName, count, sender);
+      if (ok) {
+        if (sender) bot.chat(`@${sender} 製錬完了: ${itemName} x${count}`);
+      } else {
+        if (sender) bot.chat(`@${sender} 製錬できませんでした: ${itemName}`);
+      }
+    } catch (e) {
+      log(`smelt 失敗: ${e.message}`);
+      if (sender) bot.chat(`@${sender} 失敗: ${e.message}`);
+    }
+  })();
+});
+
+commandHandlers.set('smelt', (ctx) => commandHandlers.get('smeltauto')(ctx));
 
 // 方向ヘルパー: yawから前後左右を算出（x,z の -1/0/1）
 const yawToDir = () => {
@@ -710,7 +1023,8 @@ commandHandlers.set('help', ({ sender }) => {
     'dig <block> [count] / mine <block> [count]',
     'craft <item> [count]',
     'items|inv|inventory|list',
-    'ja <enName> / jaadd <enName> <日本語> / jadel <enName>'
+    'ja <enName> / jaadd <enName> <日本語> / jadel <英名>',
+    'jaload / jaimport data/ja-items.(json|csv)'
   ];
   for (const l of lines) bot.chat(sender ? `@${sender} ${l}` : l);
 });
@@ -754,6 +1068,61 @@ commandHandlers.set('jadel', ({ args, sender }) => {
   }
 });
 
+commandHandlers.set('jaload', async ({ sender }) => {
+  try {
+    await loadJaDict();
+    bot.chat(sender ? `@${sender} 日本語辞書を再読み込みしました（${Object.keys(jaDict).length}件）` : 'OK');
+  } catch (e) {
+    bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`);
+  }
+});
+
+commandHandlers.set('jaimport', async ({ args, sender }) => {
+  const rel = args[0];
+  if (!rel) {
+    bot.chat(sender ? `@${sender} 使用: jaimport data/ja-items.csv|json` : 'usage: jaimport data/ja-items.csv|json');
+    return;
+  }
+  try {
+    const lower = rel.toLowerCase();
+    let added = 0;
+    if (lower.endsWith('.json')) {
+      // JSONを取り込み
+      const buf = await readFile(new URL(`../${rel}`, import.meta.url));
+      const obj = JSON.parse(String(buf));
+      if (!obj || typeof obj !== 'object') throw new Error('JSONが不正です');
+      for (const [k, v] of Object.entries(obj)) {
+        if (k && v) jaDict[k] = v;
+      }
+      added = Object.keys(obj).length;
+      await saveJaDict();
+    } else if (lower.endsWith('.csv') || lower.endsWith('.tsv')) {
+      // CSV/TSV取り込み（en,ja）
+      const text = String(await readFile(new URL(`../${rel}`, import.meta.url)));
+      const lines = text.split(/\r?\n/);
+      let count = 0;
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue;
+        const parts = line.split(/[\t,]/);
+        if (parts.length < 2) continue;
+        const en = parts[0].trim().replace(/^minecraft:/, '').toLowerCase();
+        const ja = parts.slice(1).join(',').trim();
+        if (!en || !ja) continue;
+        jaDict[en] = ja;
+        count++;
+      }
+      await saveJaDict();
+      added = count;
+    } else {
+      throw new Error('拡張子は .json / .csv / .tsv を指定してください');
+    }
+    bot.chat(sender ? `@${sender} 取り込み: ${rel} → ${added}件` : `取り込み: ${added}`);
+  } catch (e) {
+    bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`);
+  }
+});
+
 // かまど操作: furnace <input|fuel|take> ...
 const furnaceBlockIds = () => {
   if (!mcDataGlobal) return [];
@@ -787,7 +1156,7 @@ const pickInventoryItemByName = (name) => {
 
 commandHandlers.set('furnace', ({ args, sender }) => {
   if (!args || args.length === 0) {
-    bot.chat(sender ? `@${sender} 使用: furnace <input|fuel|take> ...` : 'usage: furnace <input|fuel|take> ...');
+    bot.chat(sender ? `@${sender} 使用: furnace <input|fuel|take|load> ...` : 'usage: furnace <input|fuel|take|load> ...');
     return;
   }
 
@@ -834,6 +1203,18 @@ commandHandlers.set('furnace', ({ args, sender }) => {
         }
       };
 
+      // 名前と数のペアを柔軟に解釈
+      const parseNameCount = (arr) => {
+        const a0 = arr[0];
+        const a1 = arr[1];
+        const isNum0 = a0 !== undefined && !isNaN(Number(a0));
+        const isNum1 = a1 !== undefined && !isNaN(Number(a1));
+        const name = (isNum0 ? a1 : a0) || '';
+        const count = Math.max(1, Math.min(64, Number(isNum0 ? a0 : (isNum1 ? a1 : 1))));
+        const consumed = (a0 !== undefined ? 1 : 0) + (a1 !== undefined ? 1 : 0);
+        return { name, count, consumed };
+      };
+
       if (sub === 'input' || sub === 'in') {
         await putCommon('input', rest);
       } else if (sub === 'fuel') {
@@ -849,8 +1230,64 @@ commandHandlers.set('furnace', ({ args, sender }) => {
       } else if (sub === 'take') {
         const what = (rest[0] || 'output').toLowerCase();
         await takeCommon(what);
+      } else if (sub === 'load') {
+        // 一度で input と fuel を投入
+        if (!rest || rest.length === 0) {
+          bot.chat(sender ? `@${sender} 使用: furnace load <inputName> [count] [fuelName] [fuelCount]` : 'usage: furnace load <inputName> [count] [fuelName] [fuelCount]');
+          furnace.close();
+          return;
+        }
+        // 入力の解釈
+        const pIn = parseNameCount(rest);
+        const inItem = pickInventoryItemByName(pIn.name);
+        if (!inItem) {
+          bot.chat(sender ? `@${sender} 所持していません: ${pIn.name}` : `所持していません: ${pIn.name}`);
+          furnace.close();
+          return;
+        }
+        await furnace.putInput(inItem.type, null, pIn.count);
+
+        // 残りで燃料を解釈（省略時は自動確保）
+        const rest2 = rest.slice(Math.max(1, pIn.consumed));
+        if (rest2.length > 0) {
+          const pFuel = parseNameCount(rest2);
+          const fuelItem = pickInventoryItemByName(pFuel.name);
+          if (!fuelItem) {
+            bot.chat(sender ? `@${sender} 燃料を所持していません: ${pFuel.name}` : `燃料を所持していません: ${pFuel.name}`);
+            furnace.close();
+            return;
+          }
+          await furnace.putFuel(fuelItem.type, null, pFuel.count);
+          bot.chat(sender ? `@${sender} かまどに投入: 入力 ${getJaItemName(inItem.name)} x${pIn.count}, 燃料 ${getJaItemName(fuelItem.name)} x${pFuel.count}` : 'loaded');
+          furnace.close();
+        } else {
+          // 軽量化: 採集せず、手持ちの石炭/木炭だけを最小限投入
+          try {
+            const units = Math.max(1, Math.ceil(pIn.count / 8));
+            const tryPutByName = async (n, need) => {
+              if (need <= 0) return 0;
+              const def = mcDataGlobal.itemsByName[n];
+              if (!def) return 0;
+              const have = invCountById(def.id, null);
+              if (have <= 0) return 0;
+              const put = Math.min(need, have);
+              await furnace.putFuel(def.id, null, put);
+              return put;
+            };
+            let remaining = units;
+            remaining -= await tryPutByName('coal', remaining);
+            if (remaining > 0) remaining -= await tryPutByName('charcoal', remaining);
+            const fueled = units - remaining;
+            if (sender) {
+              if (fueled > 0) bot.chat(`@${sender} かまどに投入: 入力 ${getJaItemName(inItem.name)} x${pIn.count}（燃料: 石炭/木炭 x${fueled}）`);
+              else bot.chat(`@${sender} かまどに投入: 入力 ${getJaItemName(inItem.name)} x${pIn.count}（燃料は手持ちに無し）`);
+            }
+          } finally {
+            furnace.close();
+          }
+        }
       } else {
-        bot.chat(sender ? `@${sender} 使用: furnace <input|fuel|take>` : 'usage: furnace <input|fuel|take>');
+        bot.chat(sender ? `@${sender} 使用: furnace <input|fuel|take|load>` : 'usage: furnace <input|fuel|take|load>');
         furnace.close();
       }
     } catch (e) {

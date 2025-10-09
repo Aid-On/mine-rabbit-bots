@@ -84,6 +84,14 @@ Bot はチャットで `!ping` と話しかけると `pong` と返答します�
   - 例: `craft stick 8`, `craft torch 4`
   - 近距離に作業台（`crafting_table`）がある場合のみ使用（パス移動はしません）
   - 材料不足や依存素材の自動作成は行いません（在庫で作れる分のみ）
+- `craftauto <itemName> [count]` / `craft+ <itemName> [count]`: 自動採集つきクラフト
+  - 材料が足りなければ、作成可能な素材は再帰的にクラフト、基礎素材は採掘で収集（原木/石/砂/石炭など）
+  - 近場の作業台が必要なレシピは近づいてからクラフト
+  - 未対応の素材や見つからない場合は途中で中断し通知します
+- `smeltauto <itemName> [count]` / `smelt <itemName> [count]`: 自動製錬
+  - 例: `smeltauto iron_ingot 8`, `smelt glass 16`
+  - 入力候補（例: iron_ingot ← raw_iron, glass ← sand など）を所持/採集から確保し、燃料（石炭/木炭）も自動投入して製錬
+  - 近くにかまどが無い場合は探索し接近して使用（未発見時は中断）
 
 注意:
 - 近くに該当ブロックがない場合や、到達できない地形の場合はスキップまたは中断します。
@@ -92,3 +100,7 @@ Bot はチャットで `!ping` と話しかけると `pong` と返答します�
 - インベントリ表示の日本語名は `data/ja-items.json`（任意）で上書きできます。
 - 例: `{ "oak_planks": "オークの板材", "stick": "棒" }`
 - ファイルが無い場合は内蔵の簡易辞書と英名（displayName）を表示します。
+- チャットから編集・取り込みも可能です:
+  - `jaadd <英名> <日本語名>` / `jadel <英名>` / `ja <英名>`
+  - `jaload` … `data/ja-items.json` を再読み込み
+  - `jaimport data/ja-items.csv` … CSV/TSV（`英名,日本語名`）を取り込み
