@@ -6,6 +6,11 @@ import { Vec3 } from 'vec3';
 import './env.js';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import path from 'path';
+import { registerActions } from './actions/index.js';
+import { craftWithAuto as libCraftWithAuto } from './lib/crafting.js';
+import { smeltAuto as libSmeltAuto, openOrApproachFurnace as libOpenOrApproachFurnace, ensureFuelInFurnace as libEnsureFuelInFurnace, smeltSources as libSmeltSources } from './lib/furnace.js';
+import { invCountById as libInvCountById, itemNameById as libItemNameById, invCountByName as libInvCountByName } from './lib/inventory.js';
+import { gatherSources as libGatherSources, gatherItemByMining as libGatherItemByMining } from './lib/gather.js';
 
 const { pathfinder, Movements, goals } = pathfinderPlugin;
 
@@ -41,6 +46,30 @@ bot.loadPlugin(pathfinder);
 
 let mcDataGlobal = null;
 let jaDict = {};
+
+// パフォーマンス設定（軽量化切替）
+const perf = {
+  mode: 'light', // 'light' | 'normal'
+};
+const dist = {
+  near: () => 6,
+  mid: () => (perf.mode === 'light' ? 10 : 12),
+  far: () => (perf.mode === 'light' ? 24 : 48)
+};
+
+// チェスト操作の同時実行を避けるためのロック
+let chestBusy = false;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const acquireChestLock = async (timeoutMs = 8000) => {
+  const start = Date.now();
+  while (chestBusy) {
+    if (Date.now() - start > timeoutMs) break;
+    await sleep(50);
+  }
+  chestBusy = true;
+  let released = false;
+  return () => { if (!released) { chestBusy = false; released = true; } };
+};
 
 const loadJaDict = async () => {
   try {
@@ -177,23 +206,275 @@ const getJaItemName = (name) => {
 };
 
 const findNearestBlockByName = (name, {
-  maxDistance = 24,  // 48 → 24 に削減
+  maxDistance = dist.far(),
   count = 1
 } = {}) => {
   if (!mcDataGlobal) return [];
   const def = mcDataGlobal.blocksByName[name];
   if (!def) return [];
   const positions = bot.findBlocks({ matching: def.id, maxDistance, count: Math.max(1, count) });
-  // Sort by distance (nearest first)
-  positions.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position));
+  // Sort by distance (nearest first) unless only 1 requested
+  if ((count || 1) > 1) {
+    positions.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position));
+  }
   return positions;
 };
 
-const findNearestBlocksByIds = (ids, { maxDistance = 32, count = 1 } = {}) => {  // 48 → 32 に削減
+// 釣り機能は削除されました
+/*
+const findShoreNearWideWater = (maxDistance = 32, maxCount = 96) => {
+  if (!mcDataGlobal) return null;
+  const water = mcDataGlobal.blocksByName['water'];
+  if (!water) return null;
+  const waters = bot.findBlocks({ matching: water.id, maxDistance, count: maxCount });
+  if (!waters || waters.length === 0) return null;
+  const scoreAt = (p) => {
+    let s = 0;
+    for (let dx = -3; dx <= 3; dx++) {
+      for (let dz = -3; dz <= 3; dz++) {
+        const q = p.offset(dx, 0, dz);
+        const b = bot.blockAt(q);
+        if (b && b.name === 'water') s++;
+      }
+    }
+    return s;
+  };
+  let best = null;
+  let bestScore = -1;
+  for (const p of waters) {
+    const score = scoreAt(p);
+    if (score > bestScore) {
+      // 岸（隣が地面）を探す
+      const dirs = [new Vec3(1,0,0), new Vec3(-1,0,0), new Vec3(0,0,1), new Vec3(0,0,-1)];
+      for (const d of dirs) {
+        const shorePos = p.minus(d); // 水の隣のブロック
+        const ground = bot.blockAt(shorePos);
+        const above = bot.blockAt(shorePos.offset(0, 1, 0));
+        if (ground && ground.name !== 'water' && isSolid(ground) && isAirLike(above)) {
+          best = { shorePos, lookPos: p };
+          bestScore = score;
+          break;
+        }
+      }
+    }
+  }
+  return best;
+};
+
+// 現在向いている方向に沿って水を探す（front ベクトルを使用）
+const findWaterAlongFront = (maxSteps = 16) => {
+  const base = bot.entity.position.floored();
+  const { front } = yawToDir();
+  let cur = base.clone();
+  for (let i = 0; i < maxSteps; i++) {
+    cur = cur.plus(front);
+    // 同じ高さか1段下を水判定
+    const here = bot.blockAt(cur);
+    const below = bot.blockAt(cur.offset(0, -1, 0));
+    const isWaterHere = here && here.name === 'water';
+    const isWaterBelow = below && below.name === 'water';
+    const waterPos = isWaterHere ? cur : (isWaterBelow ? cur.offset(0, -1, 0) : null);
+    if (waterPos) {
+      // 岸（隣接の固体ブロック + 頭上が空気）
+      const candidates = [
+        waterPos.minus(front),
+        waterPos.plus(front),
+        waterPos.plus(new Vec3(1, 0, 0)),
+        waterPos.plus(new Vec3(-1, 0, 0)),
+        waterPos.plus(new Vec3(0, 0, 1)),
+        waterPos.plus(new Vec3(0, 0, -1))
+      ];
+      for (const shore of candidates) {
+        const ground = bot.blockAt(shore);
+        const head = bot.blockAt(shore.offset(0, 1, 0));
+        if (ground && ground.name !== 'water' && isSolid(ground) && isAirLike(head)) {
+          return { shorePos: shore, waterPos };
+        }
+      }
+      // 岸が無い場合でも見つけたことにする
+      return { shorePos: base, waterPos };
+    }
+  }
+  return null;
+};
+
+const gotoShoreAndFaceWater = async () => {
+  // キャッシュを優先（30秒以内）
+  const now = Date.now();
+  if (fishState.lastShore && (now - fishState.lastShore.ts < 30000)) {
+    const { shorePos, waterPos } = fishState.lastShore;
+    try { await gotoBlock(shorePos); } catch (_) {}
+    try {
+      const lp = new Vec3(waterPos.x + 0.5, waterPos.y + 0.2, waterPos.z + 0.5);
+      await bot.lookAt(lp, true);
+    } catch (_) {}
+    return true;
+  }
+
+  const found = findShoreNearWideWater(48, 96);
+  if (!found) return false;
+  const { shorePos, lookPos } = found;
+  try { await gotoBlock(shorePos); } catch (_) {}
+  try {
+    const lp = new Vec3(lookPos.x + 0.5, lookPos.y + 0.2, lookPos.z + 0.5);
+    await bot.lookAt(lp, true);
+  } catch (_) {}
+  fishState.lastShore = { shorePos, waterPos: lookPos, ts: Date.now() };
+  return true;
+};
+
+const moveNearWaterIfNeeded = async () => {
+  try {
+    // まず現在の向きの先を優先（軽量モードは短距離のみ）
+    const maxSteps = fishState.mode === 'light' ? 10 : 20;
+    const ahead = findWaterAlongFront(maxSteps);
+    if (ahead) {
+      try { await gotoBlock(ahead.shorePos); } catch (_) {}
+      try {
+        const lp = new Vec3(ahead.waterPos.x + 0.5, ahead.waterPos.y + 0.2, ahead.waterPos.z + 0.5);
+        await bot.lookAt(lp, true);
+      } catch (_) {}
+      return true;
+    }
+    // 見つからなければ（通常モードのみ）広い水場へ
+    if (fishState.mode !== 'light') {
+      return await gotoShoreAndFaceWater();
+    }
+    return false;
+  } catch (_) { return false; }
+};
+
+const fishOnce = async () => {
+  await ensureFishingRodEquipped();
+  if (typeof bot.fish === 'function') {
+    try {
+      await bot.fish();
+    } catch (e) {
+      // 水が遠い場合は近づいて再試行
+      if (/water|no water/i.test(String(e?.message || ''))) {
+        const moved = await moveNearWaterIfNeeded();
+        if (moved) await bot.fish(); else throw e;
+      } else {
+        throw e;
+      }
+    }
+  } else {
+    // 後方互換（簡易）
+    bot.activateItem();
+    // 適度な待機後に解除（完全な検出は bot.fish が最適）
+    await new Promise((r) => setTimeout(r, 6000));
+    bot.deactivateItem?.();
+  }
+};
+
+// 釣り戦利品を近くのチェストへ自動格納
+const openNearbyChest = async (maxDistance = 6) => {
+  const block = findNearestChest(maxDistance);
+  if (!block) return null;
+  try {
+    const chest = await bot.openChest(block);
+    await sleep(120);
+    return chest;
+  } catch (_) { return null; }
+};
+
+const depositFishingLoot = async () => {
+  // 釣ったアイテムを格納（モードにより対象を切替）
+  const held = bot.heldItem || null;
+  const lootSet = new Set([
+    'cod','salmon','tropical_fish','pufferfish','raw_fish',
+    'nautilus_shell','name_tag','saddle','enchanted_book','bow','fishing_rod',
+    'string','stick','leather','bone','bowl','tripwire_hook','rotten_flesh','lily_pad','ink_sac','water_bottle'
+  ]);
+  const stacks = bot.inventory.items().filter((it) => {
+    if (!it) return false;
+    // 使っている釣り竿は除外
+    if (it.name === 'fishing_rod' && held && it.slot === held.slot) return false;
+    if (fishState.deposit === 'off') return false;
+    if (fishState.deposit === 'loot') return lootSet.has(it.name);
+    return true; // 'all'
+  });
+  if (stacks.length === 0) return 0;
+  try {
+    // まず近傍チェスト（移動なし）
+    if (chestBusy) return 0; // 他操作と競合しないようスキップ
+    let chest = await openNearbyChest(6);
+    // 見つからない場合は控えめに移動して開く（10秒に1回まで）
+    if (!chest) {
+      const now = Date.now();
+      if (now - fishState.lastDepositAt >= 10000) {
+        try { chest = await openNearestChest(); } catch (_) { chest = null; }
+      }
+      if (!chest) return 0;
+    }
+    let moved = 0;
+    let ops = 0;
+    const pause = (ms) => new Promise(r => setTimeout(r, ms));
+    for (const it of stacks) {
+      let remain = it.count;
+      while (remain > 0) {
+        const put = Math.min(64, remain);
+        let ok = false;
+        for (let retry = 0; retry < 2 && !ok; retry++) {
+          try {
+            await chest.deposit(it.type, it.metadata ?? null, put);
+            ok = true;
+          } catch (_) {
+            await pause(100);
+          }
+        }
+        if (!ok) break;
+        moved += put;
+        remain -= put;
+        ops++;
+        await pause(80);
+      }
+    }
+    chest.close();
+    return moved;
+  } catch (_) {
+    // チェストが見つからない等は無視
+    return 0;
+  }
+};
+*/
+
+const findNearestBlocksByIds = (ids, { maxDistance = dist.far(), count = 1 } = {}) => {  // 48 → 32 に削減
   if (!ids || ids.length === 0) return [];
   const positions = bot.findBlocks({ matching: (b) => ids.includes(typeof b === 'number' ? b : b.id), maxDistance, count: Math.max(1, count) });
-  positions.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position));
+  if ((count || 1) > 1) {
+    positions.sort((a, b) => a.distanceTo(bot.entity.position) - b.distanceTo(bot.entity.position));
+  }
   return positions;
+};
+
+// 掘削後のドロップ回収（近場のアイテムを集める）
+const collectItemDropsAround = async (centerPos, { radius = 6, timeoutMs = 6000, maxLoops = 8 } = {}) => {
+  const start = Date.now();
+  const dist2 = (a, b) => a.distanceTo(b);
+  const nearItems = () => Object.values(bot.entities || {})
+    .filter((e) => e && e.name === 'item')
+    .filter((e) => dist2(e.position, centerPos) <= radius)
+    .sort((a, b) => dist2(a.position, bot.entity.position) - dist2(b.position, bot.entity.position));
+
+  let loops = 0;
+  while (Date.now() - start < timeoutMs && loops++ < maxLoops) {
+    const items = nearItems();
+    if (items.length === 0) {
+      await new Promise((r) => setTimeout(r, 250));
+      continue;
+    }
+    const it = items[0];
+    try {
+      if (bot.pathfinder?.goto) {
+        const g = new goals.GoalNear(it.position.x, it.position.y, it.position.z, 1);
+        await bot.pathfinder.goto(g);
+      }
+    } catch (_) {
+      // 経路が取れない・拾えない場合は次へ
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
 };
 
 const gotoBlockAndDig = async (pos) => {
@@ -205,6 +486,10 @@ const gotoBlockAndDig = async (pos) => {
   if (!target || target.name === 'air') throw new Error('対象ブロックが存在しません');
   await equipBestToolFor(target);
   await bot.dig(target);
+  // 掘削後のドロップを回収
+  try {
+    await collectItemDropsAround(pos, { radius: 6, timeoutMs: 6000 });
+  } catch (_) {}
 };
 
 const gotoBlock = async (pos) => {
@@ -278,6 +563,21 @@ const equipBestToolFor = async (block) => {
 
   const tHand = digTimeWith(null);
 
+  // 木材系（原木/木/幹/菌糸幹/板材/竹など）は明示優先度で斧を装備
+  // 優先度: ネザライト > ダイヤ > 鉄 > 石 > 金 > 木
+  try {
+    const bname = String(block?.name || '').toLowerCase();
+    const isWoodLike = /(log|_wood$|_stem$|hyphae|planks|bamboo|mosaic)/.test(bname);
+    if (isWoodLike) {
+      const axes = toolLike.filter((it) => /(^|_)axe$/.test(it.name)); // pickaxe を除外
+      if (axes.length > 0) {
+        axes.sort((a, b) => toolTierRank(a.name) - toolTierRank(b.name));
+        const best = axes[0];
+        if (best) { await bot.equip(best, 'hand'); return; }
+      }
+    }
+  } catch (_) {}
+
   // 1) harvestTools がある場合: ドロップに必要。該当ツールから最速を選ぶ
   if (block.harvestTools) {
     const harvestable = toolLike.filter((it) => block.canHarvest(it.type));
@@ -330,489 +630,17 @@ const equipBestToolFor = async (block) => {
   // それ以外は素手でOK（ドロップに問題ないと推定）
 };
 
-commandHandlers.set('ping', () => {
-  bot.chat('pong');
-});
-
-commandHandlers.set('come', ({ sender }) => {
-  const player = bot.players[sender];
-  if (player?.entity) {
-    const { x, y, z } = player.entity.position;
-    if (bot.pathfinder?.setGoal) {
-      bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 1));
-    }
-  }
-});
-
-commandHandlers.set('follow', ({ sender }) => {
-  log(`フォロー開始: ${sender}`);
-  startFollowing(sender);
-});
-
-commandHandlers.set('stop', () => {
-  log('フォローを停止します');
-  stopFollowing();
-});
-
-commandHandlers.set('jump', () => {
-  bot.setControlState('jump', true);
-  setTimeout(() => bot.setControlState('jump', false), 500);
-});
-
-commandHandlers.set('dig', ({ args, sender }) => {
-  // 使い方:
-  // - `dig` : 目の前(または足元)の1ブロックだけ掘る（従来動作）
-  // - `dig <blockName> [count]` : 指定ブロックを近場から count 個掘る
-  if (!args || args.length === 0) {
-    // 従来の「前方/足元の1ブロックを掘る」動作は一旦停止
-    // const block = bot.blockAtCursor(5) || bot.blockAt(bot.entity.position.offset(0, -1, 0));
-    // if (block && block.name !== 'air') {
-    //   bot.dig(block).catch((err) => log(`掘れませんでした: ${err.message}`));
-    // }
-    if (sender) bot.chat(`@${sender} 使用方法: dig <blockName> [count]`);
-    return;
-  }
-
-  // 柔軟な引数解釈: `dig stone 5` も `dig 5 stone` も許可
-  const a0 = String(args[0]).toLowerCase();
-  const a1 = args[1] !== undefined ? String(args[1]).toLowerCase() : undefined;
-  const a0num = Number(a0);
-  const a1num = a1 !== undefined ? Number(a1) : NaN;
-  let blockName = isNaN(a0num) ? a0 : a1 ?? '';
-  let count = !isNaN(a0num) ? a0num : (!isNaN(a1num) ? a1num : 1);
-
-  // 名前整形: `minecraft:stone` → `stone`, 空白→`_`
-  blockName = blockName.replace(/^minecraft:/, '').replace(/\s+/g, '_');
-  count = Math.max(1, Math.min(64, Number(count)));
-  (async () => {
-    if (!mcDataGlobal) {
-      log('データ未初期化のため、後で再度お試しください');
-      return;
-    }
-    const def = mcDataGlobal.blocksByName[blockName];
-    if (!def) {
-      log(`不明なブロック名: ${blockName}`);
-      bot.chat(`@${sender} 不明なブロック名: ${blockName}`);
-      return;
-    }
-    bot.chat(`@${sender} ${blockName} を ${count} 個掘ります`);
-    let mined = 0;
-    for (let i = 0; i < count; i++) {
-      const [pos] = findNearestBlockByName(blockName, { maxDistance: 24, count: 1 });  // 48 → 24
-      if (!pos) {
-        log(`近くに ${blockName} が見つかりませんでした（進捗 ${mined}/${count}）`);
-        bot.chat(`@${sender} 近くに ${blockName} が見つかりません`);
-        break;
-      }
-      try {
-        await gotoBlockAndDig(pos);
-        mined += 1;
-        log(`${blockName} を掘りました。進捗: ${mined}/${count}`);
-        // 2回ごとにイベントループに制御を返す
-        if (i % 2 === 0 && i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-      } catch (err) {
-        log(`掘削に失敗: ${err.message}`);
-        bot.chat(`@${sender} 掘削に失敗: ${err.message}`);
-        break;
-      }
-    }
-    if (mined === count) bot.chat(`@${sender} 掘削完了: ${blockName} x${count}`);
-  })();
-});
-
-// エイリアス: `mine` でも同じ動作
-commandHandlers.set('mine', (ctx) => commandHandlers.get('dig')(ctx));
-
 // 在庫ユーティリティ
-const invCountById = (id, meta = null) => bot.inventory.count(id, meta);
-const itemNameById = (id) => mcDataGlobal?.items?.[id]?.name || String(id);
-const invCountByName = (name) => {
-  const def = mcDataGlobal?.itemsByName?.[name];
-  return def ? invCountById(def.id, null) : 0;
-};
+const invCountById = (id, meta = null) => libInvCountById(bot, id, meta);
+const itemNameById = (id) => libItemNameById(mcDataGlobal, id);
+const invCountByName = (name) => libInvCountByName(bot, mcDataGlobal, name);
 
 // 自動採集: アイテム→採掘すべきブロックの簡易マッピング
-const gatherSources = () => {
-  const b = mcDataGlobal?.blocksByName || {};
-  const ids = (names) => names.map((n) => b[n]?.id).filter(Boolean);
-  return {
-    // 原木類
-    oak_log: ids(['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log']),
-    // 丸石は石を掘っても得られる
-    cobblestone: ids(['cobblestone', 'stone']),
-    // 砂
-    sand: ids(['sand', 'red_sand']),
-    // 石炭
-    coal: ids(['coal_ore', 'deepslate_coal_ore']),
-    raw_iron: ids(['iron_ore', 'deepslate_iron_ore']),
-    raw_gold: ids(['gold_ore', 'deepslate_gold_ore']),
-    raw_copper: ids(['copper_ore', 'deepslate_copper_ore']),
-    clay_ball: ids(['clay']),
-    kelp: ids(['kelp'])
-  };
-};
-
+const gatherSources = () => libGatherSources(mcDataGlobal);
 const gatherItemByMining = async (itemName, desiredCount, opts = {}) => {
   if (!mcDataGlobal) throw new Error('データ未初期化');
-  const sources = gatherSources();
-  const ids = sources[itemName];
-  if (!ids || ids.length === 0) throw new Error(`自動採集非対応: ${itemName}`);
-
-  let obtained = 0;
-  const maxLoops = Math.max(desiredCount * 2, desiredCount + 1);  // 3 → 2 に削減
-  for (let i = 0; i < maxLoops && obtained < desiredCount; i++) {
-    const [pos] = findNearestBlocksByIds(ids, { maxDistance: opts.maxDistance || 32, count: 1 });  // 64 → 32
-    if (!pos) break;
-    try {
-      await gotoBlockAndDig(pos);
-      obtained += 1; // 概算: 1ブロック=1個
-      // 3回ごとにイベントループに制御を返す
-      if (i % 3 === 0) {
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-    } catch (e) {
-      log(`採集失敗: ${e.message}`);
-      break;
-    }
-  }
-  return obtained;
+  return await libGatherItemByMining(bot, mcDataGlobal, (ids, o) => findNearestBlocksByIds(ids, o), gotoBlockAndDig, itemName, desiredCount, opts);
 };
-
-// 製錬マッピング（出力→入力候補）
-const smeltSources = {
-  iron_ingot: ['raw_iron'],
-  gold_ingot: ['raw_gold'],
-  copper_ingot: ['raw_copper'],
-  glass: ['sand', 'red_sand'],
-  smooth_stone: ['stone'],
-  brick: ['clay_ball'],
-  dried_kelp: ['kelp'],
-  charcoal: ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'mangrove_log', 'cherry_log']
-};
-
-const openOrApproachFurnace = async () => {
-  let block = findNearestFurnace(6);
-  if (!block) {
-    block = findNearestFurnace(48);
-    if (block) await gotoBlock(block.position);
-  }
-  if (!block) throw new Error('近くにかまどが見つかりません');
-  return await bot.openFurnace(block);
-};
-
-const ensureFuelInFurnace = async (furnace, itemsToSmelt, sender) => {
-  // 石炭/木炭 優先。1燃料で8個を目安
-  const units = Math.max(1, Math.ceil(itemsToSmelt / 8));
-  const tryPut = async (name, needUnits) => {
-    const def = mcDataGlobal.itemsByName[name];
-    if (!def) return 0;
-    const have = invCountById(def.id, null);
-    if (have <= 0) return 0;
-    const put = Math.min(needUnits, have);
-    await furnace.putFuel(def.id, null, put);
-    return put;
-  };
-
-  let remaining = units;
-  remaining -= await tryPut('coal', remaining);
-  if (remaining > 0) remaining -= await tryPut('charcoal', remaining);
-
-  if (remaining > 0) {
-    // 石炭を採集して補充
-    if (sender) bot.chat(`@${sender} 燃料不足: 石炭 x${remaining} を採集`);
-    const got = await gatherItemByMining('coal', remaining);
-    if (got > 0) remaining -= await tryPut('coal', got);
-  }
-
-  if (remaining > 0) throw new Error('燃料不足');
-};
-
-const smeltAuto = async (outputName, desiredCount, sender) => {
-  outputName = outputName.replace(/^minecraft:/, '').toLowerCase();
-  const outDef = mcDataGlobal.itemsByName[outputName];
-  if (!outDef) throw new Error(`未知のアイテム: ${outputName}`);
-  const have = invCountById(outDef.id, null);
-  if (have >= desiredCount) return 0;
-  let remain = desiredCount - have;
-
-  const inputs = smeltSources[outputName] || [];
-  if (inputs.length === 0) throw new Error(`自動製錬非対応: ${outputName}`);
-
-  // 入力候補の中から所持数があるものを選ぶ。なければ採集
-  let inputName = inputs.find((n) => invCountByName(n) > 0) || null;
-  if (!inputName) {
-    // 採集対応があれば集める
-    const candidate = inputs.find((n) => gatherSources()[n]);
-    if (candidate) {
-      if (sender) bot.chat(`@${sender} 材料採集（製錬用）: ${getJaItemName(candidate)} x${remain}`);
-      await gatherItemByMining(candidate, remain);
-      inputName = candidate;
-    }
-  }
-  if (!inputName) throw new Error('材料がありません');
-
-  const inDef = mcDataGlobal.itemsByName[inputName];
-  let inHave = invCountById(inDef.id, null);
-  if (inHave <= 0) throw new Error('材料がありません');
-
-  // かまどを開き、燃料を確保し、投入
-  const furnace = await openOrApproachFurnace();
-  const toSmelt = Math.min(inHave, remain);
-  await ensureFuelInFurnace(furnace, toSmelt, sender);
-  await furnace.putInput(inDef.id, null, toSmelt);
-  if (sender) bot.chat(`@${sender} 製錬開始: ${getJaItemName(inputName)} → ${getJaItemName(outputName)} x${toSmelt}`);
-
-  // 進捗監視: 出来上がりを取り出し、目標数まで繰り返し
-  let made = 0;
-  const start = Date.now();
-  const timeoutMs = 120000; // 2分上限
-  try {
-    while (made < toSmelt && Date.now() - start < timeoutMs) {
-      await new Promise((res) => setTimeout(res, 2000));  // 1000ms → 2000ms に変更
-      const out = furnace.outputItem();
-      if (out && out.type === outDef.id) {
-        const got = await furnace.takeOutput();
-        made += got?.count || 0;
-      }
-      const inp = furnace.inputItem();
-      if (!inp) {
-        // 入力が尽きたらループ継続して出力取り切り
-      }
-    }
-  } finally {
-    furnace.close();
-  }
-
-  return made;
-};
-
-// 再帰クラフト（自動採集付）
-const craftWithAuto = async (itemId, desiredCount, sender, depth = 0) => {
-  if (!mcDataGlobal) throw new Error('データ未初期化');
-  if (depth > 4) throw new Error('依存が深すぎます');
-
-  // すでに足りていれば終了
-  if (invCountById(itemId, null) >= desiredCount) return true;
-
-  // 近距離の作業台（あれば使用）
-  const tablePos = findNearestBlockByName('crafting_table', { maxDistance: 6, count: 1 })[0];
-  const tableBlock = tablePos ? bot.blockAt(tablePos) : null;
-
-  // 作れるレシピ候補
-  const allCandidates = [
-    ...bot.recipesAll(itemId, null, null),
-    ...(tableBlock ? bot.recipesAll(itemId, null, tableBlock) : [])
-  ];
-  if (allCandidates.length === 0) throw new Error('レシピがありません');
-  const recipe = allCandidates.find((r) => !r.requiresTable) || allCandidates[0];
-
-  // 必要材料を確保
-  const once = recipe.result?.count || 1;
-  const times = Math.max(1, Math.ceil(desiredCount / once));
-  for (const d of recipe.delta) {
-    if (d.count >= 0) continue;
-    const needTotal = -(d.count) * times;
-    const needName = itemNameById(d.id);
-    let guard = 0;
-    while (invCountById(d.id, d.metadata) < needTotal) {
-      if (++guard > 8) throw new Error(`材料の確保に失敗: ${getJaItemName(needName)}`);
-      const have = invCountById(d.id, d.metadata);
-      const missing = Math.max(0, needTotal - have);
-      // 1) まずクラフトで増やせるなら増やす（再帰）
-      const subRecipes = [
-        ...bot.recipesAll(d.id, d.metadata ?? null, null),
-        ...(tableBlock ? bot.recipesAll(d.id, d.metadata ?? null, tableBlock) : [])
-      ];
-      if (subRecipes.length > 0) {
-        if (sender) bot.chat(`@${sender} 材料不足: ${getJaItemName(needName)} x${missing} → 作成試行`);
-        const ok = await craftWithAuto(d.id, needTotal, sender, depth + 1);
-        if (!ok) throw new Error(`材料作成に失敗: ${getJaItemName(needName)}`);
-        continue;
-      }
-      // 2) 製錬で得られる場合は製錬
-      const outKey = mcDataGlobal.items[d.id]?.name;
-      if (outKey && smeltSources[outKey]) {
-        if (sender) bot.chat(`@${sender} 材料不足: ${getJaItemName(outKey)} x${missing} → 製錬`);
-        const made = await smeltAuto(outKey, missing, sender);
-        if (made <= 0) throw new Error(`製錬に失敗: ${getJaItemName(outKey)}`);
-        continue;
-      }
-      // 3) 採集
-      try {
-        if (sender) bot.chat(`@${sender} 材料採集: ${getJaItemName(needName)} x${missing}`);
-        const got = await gatherItemByMining(needName, missing);
-        if (got <= 0) throw new Error(`採集できませんでした: ${getJaItemName(needName)}`);
-      } catch (e) {
-        throw new Error(e.message || `採集失敗: ${getJaItemName(needName)}`);
-      }
-    }
-  }
-
-  // 必要材料を揃えたのでクラフト実行
-  // 作業台が必要なら近づく
-  if (recipe.requiresTable && tablePos) await gotoBlock(tablePos);
-
-  for (let i = 0; i < times; i++) {
-    await bot.craft(recipe, 1, recipe.requiresTable ? (tableBlock || null) : null);
-  }
-  return invCountById(itemId, null) >= desiredCount;
-};
-
-// クラフト: craft <itemName> [count]
-commandHandlers.set('craft', ({ args, sender }) => {
-  if (!mcDataGlobal) {
-    if (sender) bot.chat(`@${sender} データ未初期化です。少し待ってから再試行してください`);
-    return;
-  }
-
-  if (!args || args.length === 0) {
-    if (sender) bot.chat(`@${sender} 使用方法: craft <itemName> [count]`);
-    return;
-  }
-
-  // 柔軟な引数解釈: `craft stick 8` も `craft 8 stick` も許可
-  const a0 = String(args[0]).toLowerCase();
-  const a1 = args[1] !== undefined ? String(args[1]).toLowerCase() : undefined;
-  const a0num = Number(a0);
-  const a1num = a1 !== undefined ? Number(a1) : NaN;
-  let itemName = isNaN(a0num) ? a0 : (a1 ?? '');
-  let desiredCount = !isNaN(a0num) ? a0num : (!isNaN(a1num) ? a1num : 1);
-
-  itemName = itemName.replace(/^minecraft:/, '').replace(/\s+/g, '_');
-  desiredCount = Math.max(1, Math.min(64, Number(desiredCount)));
-
-  const itemDef = mcDataGlobal.itemsByName[itemName];
-  if (!itemDef) {
-    log(`不明なアイテム名: ${itemName}`);
-    if (sender) bot.chat(`@${sender} 不明なアイテム: ${itemName}`);
-    return;
-  }
-
-  (async () => {
-    try {
-      // 近距離の作業台のみ使用（パス移動はしない）
-      const tablePos = findNearestBlockByName('crafting_table', { maxDistance: 6, count: 1 })[0];
-      let craftingTableBlock = null;
-      if (tablePos && tablePos.distanceTo(bot.entity.position) <= 5.5) {
-        craftingTableBlock = bot.blockAt(tablePos);
-      }
-
-      // 現在在庫で作成可能なレシピのみ使用（依存クラフトはしない）
-      let recipe = bot.recipesFor(itemDef.id, null, desiredCount, craftingTableBlock)[0];
-      if (!recipe && craftingTableBlock) {
-        // テーブルでは不可なら、インベントリレシピも試す
-        recipe = bot.recipesFor(itemDef.id, null, desiredCount, null)[0];
-      }
-      if (!recipe) {
-        if (sender) bot.chat(`@${sender} クラフト不可（材料不足か作業台が遠い）`);
-        return;
-      }
-
-      const per = recipe.result?.count || 1;
-      const times = Math.max(1, Math.ceil(desiredCount / per));
-      if (sender) bot.chat(`@${sender} ${itemName} を ${desiredCount} 個クラフトします`);
-
-      let made = 0;
-      for (let i = 0; i < times; i++) {
-        try {
-          await bot.craft(recipe, 1, recipe.requiresTable ? (craftingTableBlock || null) : null);
-          made += per;
-        } catch (err) {
-          log(`クラフト失敗: ${err.message}`);
-          break;
-        }
-      }
-
-      if (made > 0) {
-        const finalCount = Math.min(made, desiredCount);
-        if (sender) bot.chat(`@${sender} クラフト完了: ${itemName} x${finalCount}`);
-      } else {
-        if (sender) bot.chat(`@${sender} クラフトできませんでした`);
-      }
-    } catch (e) {
-      log(`クラフト処理エラー: ${e.message}`);
-      if (sender) bot.chat(`@${sender} エラー: ${e.message}`);
-    }
-  })();
-});
-
-// 自動採集つきクラフト: craft+ / craftauto <itemName> [count]
-commandHandlers.set('craft+', ({ args, sender }) => commandHandlers.get('craftauto')({ args, sender }));
-commandHandlers.set('craftauto', ({ args, sender }) => {
-  if (!mcDataGlobal) {
-    if (sender) bot.chat(`@${sender} データ未初期化です。少し待ってから再試行してください`);
-    return;
-  }
-  if (!args || args.length === 0) {
-    if (sender) bot.chat(`@${sender} 使用方法: craftauto <itemName> [count]`);
-    return;
-  }
-  const a0 = String(args[0]).toLowerCase();
-  const a1 = args[1] !== undefined ? String(args[1]).toLowerCase() : undefined;
-  const a0num = Number(a0);
-  const a1num = a1 !== undefined ? Number(a1) : NaN;
-  let itemName = isNaN(a0num) ? a0 : (a1 ?? '');
-  let desiredCount = !isNaN(a0num) ? a0num : (!isNaN(a1num) ? a1num : 1);
-  itemName = itemName.replace(/^minecraft:/, '').replace(/\s+/g, '_');
-  desiredCount = Math.max(1, Math.min(64, Number(desiredCount)));
-
-  const itemDef = mcDataGlobal.itemsByName[itemName];
-  if (!itemDef) {
-    log(`不明なアイテム名: ${itemName}`);
-    if (sender) bot.chat(`@${sender} 不明なアイテム: ${itemName}`);
-    return;
-  }
-
-  (async () => {
-    try {
-      if (sender) bot.chat(`@${sender} 自動採集つきクラフト: ${itemName} x${desiredCount}`);
-      const ok = await craftWithAuto(itemDef.id, desiredCount, sender, 0);
-      if (ok) {
-        if (sender) bot.chat(`@${sender} クラフト完了: ${itemName} x${desiredCount}`);
-      } else {
-        if (sender) bot.chat(`@${sender} 作れませんでした: ${itemName}`);
-      }
-    } catch (e) {
-      log(`クラフト(auto)失敗: ${e.message}`);
-      if (sender) bot.chat(`@${sender} 失敗: ${e.message}`);
-    }
-  })();
-});
-
-// 製錬コマンド: smeltauto / smelt <outputName> [count]
-commandHandlers.set('smeltauto', ({ args, sender }) => {
-  if (!args || args.length === 0) {
-    if (sender) bot.chat(`@${sender} 使用方法: smeltauto <itemName> [count]`);
-    return;
-  }
-  const a0 = String(args[0]).toLowerCase();
-  const a1 = args[1] !== undefined ? String(args[1]).toLowerCase() : undefined;
-  const a0num = Number(a0);
-  const a1num = a1 !== undefined ? Number(a1) : NaN;
-  let itemName = isNaN(a0num) ? a0 : (a1 ?? '');
-  let count = !isNaN(a0num) ? a0num : (!isNaN(a1num) ? a1num : 1);
-  itemName = itemName.replace(/^minecraft:/, '').replace(/\s+/g, '_');
-  count = Math.max(1, Math.min(64, Number(count)));
-
-  (async () => {
-    try {
-      if (sender) bot.chat(`@${sender} 自動製錬: ${itemName} x${count}`);
-      const ok = await smeltAuto(itemName, count, sender);
-      if (ok) {
-        if (sender) bot.chat(`@${sender} 製錬完了: ${itemName} x${count}`);
-      } else {
-        if (sender) bot.chat(`@${sender} 製錬できませんでした: ${itemName}`);
-      }
-    } catch (e) {
-      log(`smelt 失敗: ${e.message}`);
-      if (sender) bot.chat(`@${sender} 失敗: ${e.message}`);
-    }
-  })();
-});
-
-commandHandlers.set('smelt', (ctx) => commandHandlers.get('smeltauto')(ctx));
 
 // 方向ヘルパー: yawから前後左右を算出（x,z の -1/0/1）
 const yawToDir = () => {
@@ -850,11 +678,13 @@ const findPlaceRefForTarget = (targetPos) => {
   return null;
 };
 
+/* moved to actions/build.js */
+/*
 commandHandlers.set('build', ({ args, sender }) => {
   const blockName = args[0];
   const dirArg = (args[1] || 'front').toLowerCase();
   if (!blockName) {
-    if (sender) bot.chat(`@${sender} 使用方法: build <blockName> [front|back|left|right]`);
+    if (sender) bot.chat(`@${sender} 使用方法: build <blockName> [front|back|left|right|up|down|near]`);
     return;
   }
   const item = bot.inventory.items().find((i) => i.name === blockName);
@@ -865,22 +695,59 @@ commandHandlers.set('build', ({ args, sender }) => {
 
   const { front, back, left, right } = yawToDir();
   const base = bot.entity.position.floored();
-  let offset = front.clone();
-  if (dirArg === 'back') offset = back.clone();
-  else if (dirArg === 'left') offset = left.clone();
-  else if (dirArg === 'right') offset = right.clone();
-  else if (dirArg === 'up') offset = new Vec3(0, 1, 0);
-  else if (dirArg === 'down') offset = new Vec3(0, -1, 0);
+  let targetPos = null;
+  let ref = null;
 
-  const targetPos = base.plus(offset);
-  const targetBlock = bot.blockAt(targetPos);
-  if (!isAirLike(targetBlock)) {
-    log(`目標位置が空いていません: ${targetBlock?.name}`);
-    if (sender) bot.chat(`@${sender} その方向は既に埋まっています`);
+  const pickNear = () => {
+    // 近場優先で探索（半径2）
+    const cand = [];
+    const ring = [
+      new Vec3(1, 0, 0), new Vec3(-1, 0, 0),
+      new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+      new Vec3(2, 0, 0), new Vec3(-2, 0, 0),
+      new Vec3(0, 0, 2), new Vec3(0, 0, -2),
+      new Vec3(1, 0, 1), new Vec3(1, 0, -1), new Vec3(-1, 0, 1), new Vec3(-1, 0, -1)
+    ];
+    for (const d of ring) {
+      const tp = base.plus(d);
+      const tBlock = bot.blockAt(tp);
+      if (!isAirLike(tBlock)) continue;
+      // 足元がしっかりしている場所を優先
+      const below = bot.blockAt(tp.offset(0, -1, 0));
+      if (!isSolid(below)) continue;
+      const r = findPlaceRefForTarget(tp);
+      if (r) return { tp, r };
+      cand.push({ tp, r: null });
+    }
+    return null;
+  };
+
+  if (dirArg === 'near') {
+    const found = pickNear();
+    if (found) { targetPos = found.tp; ref = found.r; }
+  } else {
+    let offset = front.clone();
+    if (dirArg === 'back') offset = back.clone();
+    else if (dirArg === 'left') offset = left.clone();
+    else if (dirArg === 'right') offset = right.clone();
+    else if (dirArg === 'up') offset = new Vec3(0, 1, 0);
+    else if (dirArg === 'down') offset = new Vec3(0, -1, 0);
+    targetPos = base.plus(offset);
+  }
+
+  if (!targetPos) {
+    if (sender) bot.chat(`@${sender} 近くに設置できる場所が見つかりません`);
     return;
   }
 
-  const ref = findPlaceRefForTarget(targetPos);
+  const targetBlock = bot.blockAt(targetPos);
+  if (!isAirLike(targetBlock)) {
+    // 指定方向で不可のとき、近場サーチにフォールバック
+    const found = pickNear();
+    if (found) { targetPos = found.tp; ref = found.r; }
+  }
+
+  if (!ref) ref = findPlaceRefForTarget(targetPos);
   if (!ref) {
     if (sender) bot.chat(`@${sender} 参照ブロックが見つからず設置できません`);
     return;
@@ -902,6 +769,7 @@ commandHandlers.set('build', ({ args, sender }) => {
 
   doPlace();
 });
+*/
 
 const normalizeChat = (text) => {
   if (!text) return '';
@@ -914,25 +782,33 @@ const parseCommand = (sender, message) => {
   if (!trimmed) return null;
 
   const parts = trimmed.split(/\s+/);
-  const first = parts[0].toLowerCase();
+  let first = parts[0].toLowerCase();
   let commandParts = parts;
 
+  // !cmd / !<botname> cmd
   if (first.startsWith('!')) {
     const token = first.substring(1);
     if (token === bot.username.toLowerCase()) {
-      // pattern: !<botname> cmd ...
       commandParts = parts.slice(1);
     } else {
-      // pattern: !cmd ...  → treat as command with bang prefix
       commandParts = [token, ...parts.slice(1)];
+    }
+  } else {
+    // @<botname> cmd / <botname>: cmd / @<botname>: cmd
+    const norm = (s) => s.replace(/[,:;]+$/, '');
+    const f0 = norm(first);
+    const mentions = new Set([
+      `@${bot.username.toLowerCase()}`,
+      bot.username.toLowerCase()
+    ]);
+    if (mentions.has(f0)) {
+      commandParts = parts.slice(1);
     }
   }
 
   const command = commandParts[0]?.toLowerCase();
   const args = commandParts.slice(1);
-
   if (!command) return null;
-
   return { command, args, sender };
 };
 
@@ -1008,6 +884,8 @@ const chatChunks = (parts, maxLen = 200) => {
   return chunks;
 };
 
+/* moved to actions/items.js */
+/*
 commandHandlers.set('items', ({ sender }) => {
   const list = summarizeInventory();
   if (list.length === 0) {
@@ -1019,25 +897,39 @@ commandHandlers.set('items', ({ sender }) => {
     bot.chat(sender ? `@${sender} ${line}` : line);
   }
 });
-
 commandHandlers.set('inv', (ctx) => commandHandlers.get('items')(ctx));
 commandHandlers.set('inventory', (ctx) => commandHandlers.get('items')(ctx));
 commandHandlers.set('list', (ctx) => commandHandlers.get('items')(ctx));
+*/
 
+// 体力・満腹度表示: status / hp / food
+// status 系コマンドは actions に移動
+
+/* moved to actions/help.js */
+/*
 commandHandlers.set('help', ({ sender }) => {
   const lines = [
     'commands: ping, come, follow, stop, jump',
-    'build <block> [front|back|left|right|up|down]',
+    'look <dir|player|x y z> / face',
+    'build <block> [front|back|left|right|up|down|near]',
     'dig <block> [count] / mine <block> [count]',
     'craft <item> [count]',
     'items|inv|inventory|list',
+    'status|hp|food|ステータス|状態: 体力・満腹度を表示',
+    'furnace <input|fuel|take|load> ...',
+    'chest all  # 所持品を全て格納',
+    'chest take <itemName> [count]',
+    'perf <light|normal>  # 軽量化切替',
     'ja <enName> / jaadd <enName> <日本語> / jadel <英名>',
     'jaload / jaimport data/ja-items.(json|csv)'
   ];
   for (const l of lines) bot.chat(sender ? `@${sender} ${l}` : l);
 });
+*/
 
 // 日本語名ユーティリティ
+/* moved to actions/ja.js */
+/*
 commandHandlers.set('ja', ({ args, sender }) => {
   const en = (args[0] || '').replace(/^minecraft:/, '').toLowerCase();
   if (!en) {
@@ -1045,6 +937,61 @@ commandHandlers.set('ja', ({ args, sender }) => {
     return;
   }
   bot.chat(sender ? `@${sender} ${en} → ${getJaItemName(en)}` : `${en} → ${getJaItemName(en)}`);
+});
+
+// actions の登録（look/status など）
+registerActions(bot, commandHandlers, {
+  yawToDir,
+  getJaItemName,
+  gotoBlock,
+  goals,
+  mcData: () => mcDataGlobal,
+  log,
+  startFollowing,
+  stopFollowing,
+  getJaDict: () => jaDict,
+  saveJaDict,
+  loadJaDict,
+  // build/dig などで利用する共通処理
+  isAirLike,
+  isSolid,
+  findPlaceRefForTarget,
+  Vec3,
+  findNearestBlockByName,
+  gotoBlockAndDig,
+  // craft/furnace 系
+  craftWithAuto: (itemId, desiredCount, sender, depth=0) => libCraftWithAuto(bot, mcDataGlobal, {
+    invCountById,
+    itemNameById,
+    getJaItemName,
+    findNearestBlockByName,
+    gotoBlock,
+    smeltAuto: (out, cnt, s) => libSmeltAuto(bot, mcDataGlobal, {
+      invCountById,
+      invCountByName,
+      gatherSources,
+      gatherItemByMining,
+      openOrApproachFurnace: () => libOpenOrApproachFurnace(bot, mcDataGlobal, gotoBlock),
+      ensureFuelInFurnace: (f, n, s2) => libEnsureFuelInFurnace(bot, mcDataGlobal, { invCountById, gatherItemByMining }, f, n, s2),
+      getJaItemName,
+      smeltSources: libSmeltSources
+    }, out, cnt, s),
+    gatherItemByMining,
+  }, itemId, desiredCount, sender, depth),
+  smeltAuto: (out, cnt, s) => libSmeltAuto(bot, mcDataGlobal, {
+    invCountById,
+    invCountByName,
+    gatherSources,
+    gatherItemByMining,
+    openOrApproachFurnace: () => libOpenOrApproachFurnace(bot, mcDataGlobal, gotoBlock),
+    ensureFuelInFurnace: (f, n, s2) => libEnsureFuelInFurnace(bot, mcDataGlobal, { invCountById, gatherItemByMining }, f, n, s2),
+    getJaItemName,
+    smeltSources: libSmeltSources
+  }, out, cnt, s),
+  openOrApproachFurnace: () => libOpenOrApproachFurnace(bot, mcDataGlobal, gotoBlock),
+  ensureFuelInFurnace: (f, n, s) => libEnsureFuelInFurnace(bot, mcDataGlobal, { invCountById, gatherItemByMining }, f, n, s),
+  // perf
+  setPerfMode: (v) => { perf.mode = v; }
 });
 
 commandHandlers.set('jaadd', ({ args, sender }) => {
@@ -1130,6 +1077,7 @@ commandHandlers.set('jaimport', async ({ args, sender }) => {
     bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`);
   }
 });
+*/
 
 // かまど操作: furnace <input|fuel|take> ...
 const furnaceBlockIds = () => {
@@ -1140,16 +1088,16 @@ const furnaceBlockIds = () => {
   return ids;
 };
 
-const findNearestFurnace = (maxDistance = 6) => {
+const findNearestFurnace = (maxDistance = dist.near()) => {
   const ids = furnaceBlockIds();
   if (ids.length === 0) return null;
   return bot.findBlock({ matching: ids, maxDistance });
 };
 
 const openNearestFurnace = async () => {
-  let block = findNearestFurnace(6);
+  let block = findNearestFurnace(dist.near());
   if (!block) {
-    block = findNearestFurnace(48);
+    block = findNearestFurnace(dist.far());
     if (block) await gotoBlock(block.position);
   }
   if (!block) throw new Error('近くにかまどが見つかりません');
@@ -1162,6 +1110,48 @@ const pickInventoryItemByName = (name) => {
   return bot.inventory.items().find((i) => i.name === name) || null;
 };
 
+// チェスト操作は actions/lib に移動
+
+// チェスト関連は actions/lib に移動
+
+/* moved to actions/chest.js */
+/*
+commandHandlers.set('chest', ({ args, sender }) => {
+  if (!args || args.length === 0) {
+    bot.chat(sender ? `@${sender} 使用: chest <all|take> ...` : 'usage: chest <all|take> ...');
+    return;
+  }
+  const sub = args[0].toLowerCase();
+  const rest = args.slice(1);
+
+  const parseNameCount = (arr) => {
+    const a0 = arr[0];
+    const a1 = arr[1];
+    const isNum0 = a0 !== undefined && !isNaN(Number(a0));
+    const isNum1 = a1 !== undefined && !isNaN(Number(a1));
+    const name = (isNum0 ? a1 : a0) || '';
+    const count = Math.max(1, Math.min(64, Number(isNum0 ? a0 : (isNum1 ? a1 : 1))));
+    return { name, count };
+  };
+
+  (async () => {
+    try {
+      // chest の実装は actions/chest.js に移動済み
+      bot.chat(sender ? `@${sender} 使用: chest <all|take> ...` : 'usage: chest <all|take> ...');
+      return;
+
+      // chest の実装は actions/chest.js へ移動
+      bot.chat(sender ? `@${sender} 使用: chest <all|take> ...` : 'usage: chest <all|take> ...');
+      return;
+    } catch (e) {
+      bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`);
+    }
+  })();
+});
+*/
+
+/* moved to actions/furnace.js */
+/*
 commandHandlers.set('furnace', ({ args, sender }) => {
   if (!args || args.length === 0) {
     bot.chat(sender ? `@${sender} 使用: furnace <input|fuel|take|load> ...` : 'usage: furnace <input|fuel|take|load> ...');
@@ -1303,3 +1293,4 @@ commandHandlers.set('furnace', ({ args, sender }) => {
     }
   })();
 });
+*/
