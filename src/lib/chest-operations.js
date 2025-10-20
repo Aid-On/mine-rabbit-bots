@@ -212,18 +212,10 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
       const result = await depositItem({ bot, chest, item, log });
 
       if (result.success) {
-        log?.(`  ✓ ${getJaItemName(item.name)} x${result.moved} を格納`);
-        roundMoved += result.moved;
-
-        // チェスト情報を更新
-        if (stackableSpace > 0) {
-          const newStackable = Math.max(0, stackableSpace - result.moved);
-          chestInfo.stackableSpace.set(item.type, newStackable);
-        } else {
-          chestInfo.emptySlots = Math.max(0, chestInfo.emptySlots - 1);
-        }
+        log?.(`  ✓ ${getJaItemName(item.name)} を格納`);
+        roundMoved++;
       } else {
-        log?.(`  - ${getJaItemName(item.name)} は格納できませんでした (理由: ${result.error || 'unknown'})`);
+        log?.(`  - ${getJaItemName(item.name)} は格納できませんでした`);
         roundSkipped++;
       }
     }
@@ -231,11 +223,10 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
     totalMoved += roundMoved;
     totalSkipped += roundSkipped;
 
-    log?.(`ラウンド${round}完了: 格納${roundMoved}個, スキップ${roundSkipped}個`);
+    log?.(`ラウンド${round}完了`);
 
     // このラウンドで何も格納できなければ終了
     if (roundMoved === 0) {
-      log?.('これ以上格納できません');
       break;
     }
 

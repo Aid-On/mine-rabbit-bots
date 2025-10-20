@@ -42,9 +42,9 @@ export function register(bot, commandHandlers, ctx) {
 
             // 結果を報告
             if (totalSkipped > 0) {
-              say(`一括格納完了: ${totalMoved}個を格納（${totalSkipped}個は格納できませんでした）`);
+              say(`一括格納完了（一部格納できませんでした）`);
             } else {
-              say(`一括格納完了: ${totalMoved}個を格納`);
+              say(`一括格納完了`);
             }
           } catch (err) {
             ctx.log?.(`エラー: ${err.message}`);
