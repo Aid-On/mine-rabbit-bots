@@ -106,52 +106,10 @@ export async function depositItem({ bot, chest, item, log }) {
   }
 
   try {
-    // bot.currentWindowを使ってクリック操作でアイテムを転送
-    const window = bot.currentWindow;
-
-    // インベントリスロットをウィンドウスロットに変換
-    // inventory slot 0-8: ホットバー → window slot 54-62
-    // inventory slot 9-35: メインインベントリ → window slot 27-53
-    let sourceWindowSlot;
-    if (slotId >= 0 && slotId < 9) {
-      sourceWindowSlot = 54 + slotId;
-    } else if (slotId >= 9 && slotId <= 35) {
-      sourceWindowSlot = 27 + (slotId - 9);
-    } else if (slotId >= 36 && slotId < 45) {
-      // ホットバー（36-44も0-8として扱われる）
-      sourceWindowSlot = 54 + (slotId - 36);
-    } else {
-      return { success: false, moved: 0, error: `無効なスロット: ${slotId}` };
-    }
-
-    // アイテムを掴む
-    await bot.clickWindow(sourceWindowSlot, 0, 0);
-    await sleep(50);
-
-    // チェストの空きスロットを探す（0 ~ inventoryStart-1）
-    let destSlot = null;
-    for (let i = 0; i < window.inventoryStart; i++) {
-      const slot = window.slots[i];
-      if (!slot) {
-        // 空きスロット
-        destSlot = i;
-        break;
-      } else if (slot.type === sourceItem.type && slot.count < (slot.stackSize || 64)) {
-        // スタック可能
-        destSlot = i;
-        break;
-      }
-    }
-
-    if (destSlot !== null) {
-      await bot.clickWindow(destSlot, 0, 0);
-      await sleep(50);
-    } else {
-      // 空きがない場合は戻す
-      await bot.clickWindow(sourceWindowSlot, 0, 0);
-      await sleep(50);
-    }
-
+    // chest.deposit() を使用（type, metadata, count を渡す）
+    // これによりmineflayerが内部で正しいスロット検索と転送を行う
+    const metadata = sourceItem.metadata ?? null;
+    await chest.deposit(sourceItem.type, metadata, sourceItem.count);
     await sleep(200);
 
     // 格納後の確認
