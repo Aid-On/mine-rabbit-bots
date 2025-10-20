@@ -108,9 +108,21 @@ export async function depositItem({ bot, chest, item, log }) {
   try {
     // chest.deposit() を使用（type, metadata, count を渡す）
     // これによりmineflayerが内部で正しいスロット検索と転送を行う
+    // 重要: コールバックを使って完了を待つ必要がある（連続実行時のトランザクション拒否を防ぐため）
     const metadata = sourceItem.metadata ?? null;
-    await chest.deposit(sourceItem.type, metadata, sourceItem.count);
-    await sleep(200);
+
+    // Promiseでラップしてコールバックの完了を待つ
+    await new Promise((resolve, reject) => {
+      chest.deposit(sourceItem.type, metadata, sourceItem.count, (err) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
+
+    await sleep(100);
 
     // 格納後の確認
     const updatedItems = bot.inventory.items();
