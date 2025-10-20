@@ -117,7 +117,20 @@ export async function depositItem({ bot, chest, item, log }) {
     const window = bot.currentWindow;
 
     // インベントリスロットをウィンドウスロットに変換
-    const sourceWindowSlot = window.inventoryStart + slotId;
+    // inventory slot 0-8: ホットバー → window slot 54-62
+    // inventory slot 9-35: メインインベントリ → window slot 27-53
+    let sourceWindowSlot;
+    if (slotId >= 0 && slotId < 9) {
+      sourceWindowSlot = 54 + slotId;
+    } else if (slotId >= 9 && slotId <= 35) {
+      sourceWindowSlot = 27 + (slotId - 9);
+    } else if (slotId >= 36 && slotId < 45) {
+      // ホットバー（36-44も0-8として扱われる）
+      sourceWindowSlot = 54 + (slotId - 36);
+    } else {
+      console.error(`[DEPOSIT] Invalid slot: ${slotId}`);
+      return { success: false, moved: 0, error: `無効なスロット: ${slotId}` };
+    }
 
     console.error(`[DEPOSIT] Clicking source slot: ${sourceWindowSlot} (inventory slot ${slotId})`);
 
