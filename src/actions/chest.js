@@ -25,89 +25,104 @@ export function register(bot, commandHandlers, ctx) {
           const release = await acquireLock('chest');
           try {
             const chest = await openNearestChest(bot, ctx.mcData(), ctx.gotoBlock);
+            ctx.log?.('チェストを開きました');
 
-            // 除外スロット（装備 / 手 / オフハンド）
-            const exclude = new Set();
-            try {
-              if (bot.heldItem?.slot != null) exclude.add(bot.heldItem.slot);
-              const eq = ['head', 'torso', 'legs', 'feet'];
-              for (const k of eq) {
-                const s = bot.getEquipmentDestSlot ? bot.getEquipmentDestSlot(k) : null;
-                if (s != null) exclude.add(s);
+            // 装備・手持ちを除外するスロット
+            const getExcludedSlots = () => {
+              const excluded = new Set();
+              // 手持ちアイテム
+              if (bot.heldItem?.slot != null) {
+                excluded.add(bot.heldItem.slot);
               }
-              if (bot.inventory?.slots?.[45]) exclude.add(45);
-            } catch (_) {}
-
-            let moved = 0;
-            let failed = 0;
-            let loops = 0;
-            const maxLoops = 10;
-
-            // チェストが満杯になるまで繰り返す
-            while (loops < maxLoops) {
-              loops++;
-
-              // 現在のインベントリを再取得
-              const stacks = bot.inventory.items().filter((it) => it && !exclude.has(it.slot));
-              if (stacks.length === 0) break;
-
-              ctx.log?.(`ループ ${loops}: ${stacks.length} 個のアイテムを処理`);
-              let progressed = false;
-
-              for (const it of stacks) {
+              // 装備品
+              const equipSlots = ['head', 'torso', 'legs', 'feet'];
+              for (const slot of equipSlots) {
                 try {
-                  const beforeCount = it.count;
-                  ctx.log?.(`格納試行: ${ctx.getJaItemName(it.name)} (type:${it.type}, meta:${it.metadata ?? 'null'}, count:${it.count})`);
+                  const slotNum = bot.getEquipmentDestSlot?.(slot);
+                  if (slotNum != null) excluded.add(slotNum);
+                } catch (_) {}
+              }
+              // オフハンド（スロット45）
+              if (bot.inventory?.slots?.[45]) {
+                excluded.add(45);
+              }
+              return excluded;
+            };
 
-                  // depositの呼び出しを簡略化（metadataはnullで統一）
-                  await chest.deposit(it.type, null, it.count);
-                  await sleep(150);
+            let totalMoved = 0;
+            let totalFailed = 0;
 
-                  // 格納後のアイテムを確認
-                  const afterItem = bot.inventory.items().find(i => i.slot === it.slot);
-                  const actualMoved = beforeCount - (afterItem?.count || 0);
+            // 最大5回ループ（通常は1-2回で完了するはず）
+            for (let round = 1; round <= 5; round++) {
+              const excludedSlots = getExcludedSlots();
+              const items = bot.inventory.items().filter(item => !excludedSlots.has(item.slot));
+
+              if (items.length === 0) {
+                ctx.log?.(`ラウンド${round}: インベントリが空です`);
+                break;
+              }
+
+              ctx.log?.(`ラウンド${round}: ${items.length}種類のアイテムを処理`);
+              let roundMoved = 0;
+              let roundFailed = 0;
+
+              for (const item of items) {
+                try {
+                  // 現在の所持数を記録
+                  const countBefore = item.count;
+
+                  // チェストに預ける
+                  await chest.deposit(item.type, null, countBefore);
+                  await sleep(200); // 処理完了を待つ
+
+                  // 預けた後の所持数を確認
+                  const updatedItems = bot.inventory.items();
+                  const updatedItem = updatedItems.find(i => i.slot === item.slot);
+                  const countAfter = updatedItem ? updatedItem.count : 0;
+                  const actualMoved = countBefore - countAfter;
 
                   if (actualMoved > 0) {
-                    moved += actualMoved;
-                    progressed = true;
-                    ctx.log?.(`✓ 格納成功: ${ctx.getJaItemName(it.name)} x${actualMoved}`);
+                    ctx.log?.(`  ✓ ${ctx.getJaItemName(item.name)} x${actualMoved} を格納`);
+                    roundMoved += actualMoved;
                   } else {
-                    ctx.log?.(`⚠ 格納数0: ${ctx.getJaItemName(it.name)} (before:${beforeCount}, after:${afterItem?.count ?? 0})`);
+                    ctx.log?.(`  - ${ctx.getJaItemName(item.name)} は格納できませんでした（チェスト満杯の可能性）`);
+                    roundFailed++;
                   }
-
-                  await sleep(100);
                 } catch (err) {
-                  const errMsg = err.message || String(err);
-                  ctx.log?.(`✗ 格納失敗: ${ctx.getJaItemName(it.name)} - ${errMsg}`);
-                  console.error(`[chest all] Error depositing ${it.name}:`, err);
-                  failed++;
-
-                  // チェストが満杯の可能性が高い
-                  if (errMsg.includes('full') || errMsg.includes('No space') || errMsg.includes('slot')) {
-                    ctx.log?.('チェストが満杯または空きスロットがありません');
-                    break;
-                  }
+                  ctx.log?.(`  ✗ ${ctx.getJaItemName(item.name)} の格納に失敗: ${err.message}`);
+                  roundFailed++;
                 }
               }
 
-              // 進捗がなければ終了（チェストが満杯など）
-              if (!progressed) {
-                ctx.log?.('進捗なし。処理を終了します');
+              totalMoved += roundMoved;
+              totalFailed += roundFailed;
+
+              ctx.log?.(`ラウンド${round}完了: 格納${roundMoved}個, 失敗${roundFailed}個`);
+
+              // このラウンドで何も格納できなければ終了
+              if (roundMoved === 0) {
+                ctx.log?.('これ以上格納できません。処理を終了します');
                 break;
               }
-              await sleep(100);
+
+              await sleep(300);
             }
 
-            await sleep(200);
+            chest.close();
+            ctx.log?.('チェストを閉じました');
 
-            if (failed > 0) {
-              say(`一括格納: ${moved} 個をチェストへ（${failed} 個のアイテムは格納できませんでした）`);
+            // 結果を報告
+            if (totalFailed > 0) {
+              say(`一括格納完了: ${totalMoved}個を格納（${totalFailed}個は格納できませんでした）`);
             } else {
-              say(`一括格納: ${moved} 個をチェストへ`);
+              say(`一括格納完了: ${totalMoved}個を格納`);
             }
-
-            try { chest.close(); } catch (_) {}
-          } finally { release(); }
+          } catch (err) {
+            ctx.log?.(`エラー: ${err.message}`);
+            say(`失敗: ${err.message}`);
+          } finally {
+            release();
+          }
           return;
         }
 
