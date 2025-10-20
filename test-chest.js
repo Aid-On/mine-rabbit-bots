@@ -2,6 +2,7 @@
 // チェスト操作のテストコード
 
 import { createBot } from 'mineflayer';
+import minecraftData from 'minecraft-data';
 import './src/env.js';
 
 const rawHost = process.env.MINEFLAYER_HOST || '127.0.0.1';
@@ -36,7 +37,7 @@ bot.on('chat', async (username, message) => {
 
   try {
     // 近くのチェストを探す
-    const mcData = require('minecraft-data')(bot.version);
+    const mcData = minecraftData(bot.version);
     const chestIds = [];
     const add = (n) => { const b = mcData.blocksByName[n]; if (b) chestIds.push(b.id); };
     add('chest'); add('trapped_chest');

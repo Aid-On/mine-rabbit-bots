@@ -1,5 +1,6 @@
 // 最小限のdeposit()テスト
 import { createBot } from 'mineflayer';
+import minecraftData from 'minecraft-data';
 
 const bot = createBot({
   host: '127.0.0.1',
@@ -16,7 +17,7 @@ bot.on('chat', async (username, msg) => {
   if (msg !== 'test') return;
 
   try {
-    const mcData = require('minecraft-data')(bot.version);
+    const mcData = minecraftData(bot.version);
     const chestDef = mcData.blocksByName['chest'];
     const block = bot.findBlock({ matching: [chestDef.id], maxDistance: 6 });
 
