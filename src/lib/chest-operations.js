@@ -116,14 +116,41 @@ export async function depositItem({ bot, chest, item, log }) {
     // bot.currentWindowを使ってクリック操作でアイテムを転送
     const window = bot.currentWindow;
 
-    // カーソルにアイテムが残っていたらクリア
+    // カーソルにアイテムが残っていたらクリア（チェストに優先的に格納）
     if (window.selectedItem) {
       console.error(`[DEPOSIT] Clearing carried item: ${window.selectedItem.name} x${window.selectedItem.count}`);
-      // 元のスロットに戻すため、任意の空きスロットをクリック（2回クリックで戻る）
-      const emptySlot = window.slots.findIndex((slot, idx) => !slot && idx >= window.inventoryStart);
-      if (emptySlot !== -1) {
-        await bot.clickWindow(emptySlot, 0, 0);
+
+      // まずチェスト内の空きまたはスタック可能なスロットを探す
+      let clearSlot = null;
+      for (let i = 0; i < window.inventoryStart; i++) {
+        const slot = window.slots[i];
+        if (!slot) {
+          clearSlot = i;
+          console.error(`[DEPOSIT] Found empty chest slot for carried item: ${i}`);
+          break;
+        } else if (slot.type === window.selectedItem.type && slot.count < (slot.stackSize || 64)) {
+          clearSlot = i;
+          console.error(`[DEPOSIT] Found stackable chest slot for carried item: ${i}`);
+          break;
+        }
+      }
+
+      if (clearSlot !== null) {
+        await bot.clickWindow(clearSlot, 0, 0);
         await sleep(50);
+        console.error(`[DEPOSIT] Cleared carried item to chest slot ${clearSlot}`);
+      } else {
+        // チェストに空きがない場合のみインベントリに戻す
+        console.error(`[DEPOSIT] No space in chest for carried item, trying inventory`);
+        const invSlot = window.slots.findIndex((slot, idx) => !slot && idx >= window.inventoryStart && idx < window.inventoryEnd);
+        if (invSlot !== -1) {
+          await bot.clickWindow(invSlot, 0, 0);
+          await sleep(50);
+          console.error(`[DEPOSIT] Cleared carried item to inventory slot ${invSlot}`);
+        } else {
+          console.error(`[DEPOSIT] WARNING: Cannot clear carried item - no space anywhere!`);
+          return { success: false, moved: 0, error: 'カーソルにアイテムが残っており、空きスロットがありません' };
+        }
       }
     }
 

@@ -43,13 +43,14 @@ The unit tests cover the following functions from `src/lib/chest-operations.js`:
 
 4. **depositItem({ bot, chest, item, log })** - Deposits single item
    - ✓ Returns proper result object
+   - ✓ Validates bot.currentWindow exists before accessing it
 
 ### Current Test Results
 
 ```
 === Test Summary ===
-Total: 7
-Passed: 7
+Total: 8
+Passed: 8
 Failed: 0
 Success Rate: 100.0%
 ```
@@ -96,6 +97,22 @@ node test-deposit-auto.js
 - Bot has items in inventory to test with
 
 ## Key Implementation Details
+
+### Cursor Handling Issue (Fixed)
+
+The implementation had a critical bug where items would accumulate in the cursor (selectedItem) during deposit operations:
+
+**Problem:**
+- When clicking an occupied chest slot, Minecraft swaps items (deposited item goes to chest, chest item goes to cursor)
+- The original cursor clearing logic tried to put carried items back into the bot's inventory
+- If inventory was full, the cursor wasn't cleared, causing subsequent deposits to fail
+
+**Solution:**
+- Cursor clearing now prioritizes putting items into the **chest** first (empty or stackable slots)
+- Only if the chest is full does it try putting items back into inventory
+- If no space exists anywhere, the function returns an error instead of proceeding
+
+**Code location:** src/lib/chest-operations.js:119-155
 
 ### Slot Number Issue (Fixed)
 

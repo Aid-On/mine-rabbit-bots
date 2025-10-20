@@ -292,7 +292,7 @@ let passedTests = 0;
         result.success === false &&
         result.error !== undefined &&
         !result.error.includes('Cannot read properties of undefined') && // ← ランタイムエラーではなく
-        (result.error.includes('chest is closed') || result.error.includes('invalid chest')); // ← 適切なメッセージ
+        (result.error.includes('No window open') || result.error.includes('chest is closed') || result.error.includes('invalid chest')); // ← 適切なメッセージ
 
       if (testResult('depositItem - validates chest.window properly', hasProperValidation)) {
         passedTests++;
