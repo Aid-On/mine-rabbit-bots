@@ -137,11 +137,52 @@ export function register(bot, commandHandlers, ctx) {
                   const countBefore = item.count;
                   const slotId = item.slot;
 
-                  // chest.depositを使ってシンプルに格納
-                  // depositは内部で適切にスロットを処理してくれる
-                  await chest.deposit(item.type, null, countBefore);
+                  // bot.inventory経由でアイテムを取得
+                  const sourceItem = bot.inventory.slots[slotId];
+                  if (!sourceItem) {
+                    ctx.log?.(`  - ${ctx.getJaItemName(item.name)} スロット${slotId}が空です`);
+                    roundSkipped++;
+                    continue;
+                  }
 
-                  await sleep(250);
+                  // bot.clickWindowを使って直接転送
+                  // chest.windowでのインベントリスロット番号に変換
+                  const windowSlot = chest.window.inventoryStart + slotId;
+
+                  // アイテムをクリックして掴む（左クリック）
+                  await bot.clickWindow(windowSlot, 0, 0);
+                  await sleep(50);
+
+                  // チェストの空きスロットまたはスタック可能スロットを探す
+                  const containerStart = 0;
+                  const containerEnd = chest.window.inventoryStart;
+                  let deposited = false;
+
+                  for (let destSlot = containerStart; destSlot < containerEnd; destSlot++) {
+                    const destItem = chest.window.slots[destSlot];
+
+                    if (!destItem) {
+                      // 空きスロットに配置
+                      await bot.clickWindow(destSlot, 0, 0);
+                      await sleep(50);
+                      deposited = true;
+                      break;
+                    } else if (destItem.type === sourceItem.type && destItem.count < (destItem.stackSize || 64)) {
+                      // 同じアイテムにスタック
+                      await bot.clickWindow(destSlot, 0, 0);
+                      await sleep(50);
+                      deposited = true;
+                      break;
+                    }
+                  }
+
+                  // まだアイテムを持っている場合は元に戻す
+                  if (!deposited && bot.currentWindow?.selectedItem) {
+                    await bot.clickWindow(windowSlot, 0, 0);
+                    await sleep(50);
+                  }
+
+                  await sleep(200);
 
                   const updatedItems = bot.inventory.items();
                   const updatedItem = updatedItems.find(i => i.slot === slotId);
