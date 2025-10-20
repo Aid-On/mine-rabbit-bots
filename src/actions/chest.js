@@ -29,6 +29,21 @@ export function register(bot, commandHandlers, ctx) {
             await sleep(300);
             ctx.log?.('チェストを開きました');
 
+            // カーソルに残っているアイテムをクリア（前回の操作の残り）
+            const window = bot.currentWindow;
+            if (window && window.selectedItem) {
+              ctx.log?.(`カーソルに残留アイテム: ${window.selectedItem.name} x${window.selectedItem.count} をインベントリに戻します`);
+              // インベントリの空きスロットに戻す
+              for (let i = window.inventoryStart; i < window.inventoryEnd; i++) {
+                if (!window.slots[i]) {
+                  await bot.clickWindow(i, 0, 0);
+                  await sleep(100);
+                  ctx.log?.(`カーソルをクリアしました`);
+                  break;
+                }
+              }
+            }
+
             // ビジネスロジックを呼び出し
             const { totalMoved, totalSkipped } = await depositAllItems({
               bot,

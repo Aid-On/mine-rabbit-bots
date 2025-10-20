@@ -91,59 +91,23 @@ export function sortItemsByPriority(items, stackableSpace) {
  * @returns {Object} { success, moved, error }
  */
 export async function depositItem({ bot, chest, item, log }) {
-  console.error(`[DEPOSIT] Called for ${item.name}`);
-
   const countBefore = item.count;
   const slotId = item.slot;
 
   // currentWindowを検証
   if (!bot.currentWindow) {
-    console.error(`[DEPOSIT] No window open`);
     return { success: false, moved: 0, error: 'No window open' };
   }
 
   // bot.inventory経由でアイテムを取得
   const sourceItem = bot.inventory.slots[slotId];
   if (!sourceItem) {
-    console.error(`[DEPOSIT] sourceItem not found at slot ${slotId}`);
     return { success: false, moved: 0, error: `スロット${slotId}が空` };
   }
-
-  console.error(`[DEPOSIT] About to transfer slot=${slotId}, type=${sourceItem.type}, count=${sourceItem.count}`);
-  console.error(`[DEPOSIT] Window: inventoryStart=${bot.currentWindow.inventoryStart}, inventoryEnd=${bot.currentWindow.inventoryEnd}`);
 
   try {
     // bot.currentWindowを使ってクリック操作でアイテムを転送
     const window = bot.currentWindow;
-
-    // カーソル状態をデバッグ
-    console.error(`[DEPOSIT] Cursor state check:`);
-    console.error(`[DEPOSIT]   window.selectedItem: ${window.selectedItem ? `${window.selectedItem.name} x${window.selectedItem.count}` : 'null'}`);
-
-    // カーソルクリア：window.selectedItemがnullでもカーソルにアイテムが残っている場合があるため、
-    // 無条件で空のチェストスロットをクリックしてカーソルをクリアする
-    console.error(`[DEPOSIT] Attempting to clear cursor unconditionally...`);
-
-    // チェスト内の空きスロットを探す
-    let clearSlot = null;
-    for (let i = 0; i < window.inventoryStart; i++) {
-      const slot = window.slots[i];
-      if (!slot) {
-        clearSlot = i;
-        console.error(`[DEPOSIT] Found empty chest slot for cursor clear: ${i}`);
-        break;
-      }
-    }
-
-    if (clearSlot !== null) {
-      // 空のスロットをクリック（カーソルにアイテムがあれば配置、なければ何も起こらない）
-      await bot.clickWindow(clearSlot, 0, 0);
-      await sleep(100);
-      console.error(`[DEPOSIT] Clicked empty slot ${clearSlot} to clear cursor`);
-    } else {
-      console.error(`[DEPOSIT] WARNING: No empty slot in chest for cursor clear`);
-      // チェストに空きがない場合は処理を続行（カーソルに何もないことを祈る）
-    }
 
     // インベントリスロットをウィンドウスロットに変換
     // inventory slot 0-8: ホットバー → window slot 54-62
@@ -157,11 +121,8 @@ export async function depositItem({ bot, chest, item, log }) {
       // ホットバー（36-44も0-8として扱われる）
       sourceWindowSlot = 54 + (slotId - 36);
     } else {
-      console.error(`[DEPOSIT] Invalid slot: ${slotId}`);
       return { success: false, moved: 0, error: `無効なスロット: ${slotId}` };
     }
-
-    console.error(`[DEPOSIT] Clicking source slot: ${sourceWindowSlot} (inventory slot ${slotId})`);
 
     // アイテムを掴む
     await bot.clickWindow(sourceWindowSlot, 0, 0);
@@ -169,29 +130,23 @@ export async function depositItem({ bot, chest, item, log }) {
 
     // チェストの空きスロットを探す（0 ~ inventoryStart-1）
     let destSlot = null;
-    console.error(`[DEPOSIT] Searching for empty slot in chest (0 to ${window.inventoryStart - 1})`);
     for (let i = 0; i < window.inventoryStart; i++) {
       const slot = window.slots[i];
-      console.error(`[DEPOSIT] Slot ${i}: ${slot ? `${slot.name} x${slot.count}` : 'empty'}`);
       if (!slot) {
         // 空きスロット
         destSlot = i;
-        console.error(`[DEPOSIT] Found empty slot: ${i}`);
         break;
       } else if (slot.type === sourceItem.type && slot.count < (slot.stackSize || 64)) {
         // スタック可能
         destSlot = i;
-        console.error(`[DEPOSIT] Found stackable slot: ${i}`);
         break;
       }
     }
 
     if (destSlot !== null) {
-      console.error(`[DEPOSIT] Clicking dest slot: ${destSlot}`);
       await bot.clickWindow(destSlot, 0, 0);
       await sleep(50);
     } else {
-      console.error(`[DEPOSIT] No space in chest, returning item`);
       // 空きがない場合は戻す
       await bot.clickWindow(sourceWindowSlot, 0, 0);
       await sleep(50);
@@ -205,16 +160,12 @@ export async function depositItem({ bot, chest, item, log }) {
     const countAfter = updatedItem ? updatedItem.count : 0;
     const actualMoved = countBefore - countAfter;
 
-    console.error(`[DEPOSIT] After transfer: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
-
     return {
       success: actualMoved > 0,
       moved: actualMoved,
       deposited: actualMoved > 0
     };
   } catch (err) {
-    console.error(`[DEPOSIT] Error: ${err.message}`);
-    console.error(`[DEPOSIT] Stack: ${err.stack}`);
     return { success: false, moved: 0, error: err.message };
   }
 }
@@ -230,9 +181,6 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
 
   // 最大5回ループ
   for (let round = 1; round <= 5; round++) {
-    // 状態が更新されるまで少し待つ
-    await sleep(200);
-
     // チェストの状態を分析
     const chestInfo = analyzeChest(chest);
     log?.(`ラウンド${round}: チェスト状態 - 空き${chestInfo.emptySlots}/${chestInfo.totalSlots}スロット`);
