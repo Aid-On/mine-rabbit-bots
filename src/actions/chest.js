@@ -30,14 +30,14 @@ export function register(bot, commandHandlers, ctx) {
             ctx.log?.('チェストを開きました');
 
             // カーソルに残っているアイテムをクリア（前回の操作の残り）
+            // window.selectedItemは更新が遅いため、無条件でクリアする
             const window = bot.currentWindow;
-            if (window && window.selectedItem) {
-              ctx.log?.(`カーソルに残留アイテム: ${window.selectedItem.name} x${window.selectedItem.count} をインベントリに戻します`);
-              // インベントリの空きスロットに戻す
+            if (window) {
+              // インベントリの最初の空きスロットをクリック（カーソルにアイテムがあれば配置される）
               for (let i = window.inventoryStart; i < window.inventoryEnd; i++) {
                 if (!window.slots[i]) {
                   await bot.clickWindow(i, 0, 0);
-                  await sleep(100);
+                  await sleep(200);
                   ctx.log?.(`カーソルをクリアしました`);
                   break;
                 }
