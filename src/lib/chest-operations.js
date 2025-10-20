@@ -129,7 +129,7 @@ export async function depositItem({ bot, chest, item, log }) {
     // Shift+クリックを使ってアイテムを転送
     // mode=1 はshift-click（アイテムを自動的に反対側のコンテナに移動）
     await bot.clickWindow(sourceWindowSlot, 0, 1);
-    await sleep(300);
+    await sleep(700); // インベントリ状態の更新を十分に待つ
 
     // 格納後の確認
     const updatedItems = bot.inventory.items();
