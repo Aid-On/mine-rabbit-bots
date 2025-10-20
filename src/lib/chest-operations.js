@@ -134,12 +134,11 @@ export async function depositItem({ bot, chest, item, log }) {
     // mode=1 はshift-click（アイテムを自動的に反対側のコンテナに移動）
     console.error(`[DEPOSIT] Shift-clicking window slot ${sourceWindowSlot}`);
     await bot.clickWindow(sourceWindowSlot, 0, 1);
-    await sleep(700); // インベントリ状態の更新を十分に待つ
+    await sleep(500); // インベントリ状態の更新を待つ
 
-    // 格納後の確認
-    const updatedItems = bot.inventory.items();
-    const updatedItem = updatedItems.find(i => i.slot === slotId);
-    const countAfter = updatedItem ? updatedItem.count : 0;
+    // 格納後の確認：window.slotsを使う方が更新が早い
+    const updatedSlot = window.slots[sourceWindowSlot];
+    const countAfter = updatedSlot ? updatedSlot.count : 0;
     const actualMoved = countBefore - countAfter;
 
     console.error(`[DEPOSIT] Result: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
