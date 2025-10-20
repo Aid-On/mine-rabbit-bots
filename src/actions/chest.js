@@ -51,12 +51,17 @@ export function register(bot, commandHandlers, ctx) {
               const stacks = bot.inventory.items().filter((it) => it && !exclude.has(it.slot));
               if (stacks.length === 0) break;
 
+              ctx.log?.(`ループ ${loops}: ${stacks.length} 個のアイテムを処理`);
               let progressed = false;
 
               for (const it of stacks) {
                 try {
                   const beforeCount = it.count;
-                  await chest.deposit(it.type, it.metadata ?? null, it.count);
+                  ctx.log?.(`格納試行: ${ctx.getJaItemName(it.name)} (type:${it.type}, meta:${it.metadata ?? 'null'}, count:${it.count})`);
+
+                  // depositの呼び出しを簡略化（metadataはnullで統一）
+                  await chest.deposit(it.type, null, it.count);
+                  await sleep(150);
 
                   // 格納後のアイテムを確認
                   const afterItem = bot.inventory.items().find(i => i.slot === it.slot);
@@ -65,24 +70,31 @@ export function register(bot, commandHandlers, ctx) {
                   if (actualMoved > 0) {
                     moved += actualMoved;
                     progressed = true;
-                    ctx.log?.(`格納: ${ctx.getJaItemName(it.name)} x${actualMoved}`);
+                    ctx.log?.(`✓ 格納成功: ${ctx.getJaItemName(it.name)} x${actualMoved}`);
+                  } else {
+                    ctx.log?.(`⚠ 格納数0: ${ctx.getJaItemName(it.name)} (before:${beforeCount}, after:${afterItem?.count ?? 0})`);
                   }
 
                   await sleep(100);
                 } catch (err) {
-                  ctx.log?.(`格納失敗: ${ctx.getJaItemName(it.name)} - ${err.message}`);
+                  const errMsg = err.message || String(err);
+                  ctx.log?.(`✗ 格納失敗: ${ctx.getJaItemName(it.name)} - ${errMsg}`);
+                  console.error(`[chest all] Error depositing ${it.name}:`, err);
                   failed++;
 
                   // チェストが満杯の可能性が高い
-                  if (err.message?.includes('full') || err.message?.includes('No space')) {
-                    ctx.log?.('チェストが満杯です');
+                  if (errMsg.includes('full') || errMsg.includes('No space') || errMsg.includes('slot')) {
+                    ctx.log?.('チェストが満杯または空きスロットがありません');
                     break;
                   }
                 }
               }
 
               // 進捗がなければ終了（チェストが満杯など）
-              if (!progressed) break;
+              if (!progressed) {
+                ctx.log?.('進捗なし。処理を終了します');
+                break;
+              }
               await sleep(100);
             }
 
