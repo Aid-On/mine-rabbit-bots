@@ -106,10 +106,33 @@ export async function depositItem({ bot, chest, item, log }) {
   }
 
   try {
-    // chest.deposit() を使用（type, metadata, count を渡す）
-    // これによりmineflayerが内部で正しいスロット検索と転送を行う
-    // 重要: コールバックを使って完了を待つ必要がある（連続実行時のトランザクション拒否を防ぐため）
+    const window = bot.currentWindow;
     const metadata = sourceItem.metadata ?? null;
+
+    // ホットバー（スロット36-44）のアイテムはchest.deposit()で検出できないため、
+    // 一時的にメインインベントリ（スロット9-35）に移動してから格納する
+    let needsRestore = false;
+    let tempSlot = null;
+
+    if (slotId >= 36 && slotId <= 44) {
+      // メインインベントリの空きスロットを探す
+      for (let i = 9; i <= 35; i++) {
+        if (!bot.inventory.slots[i]) {
+          tempSlot = i;
+          break;
+        }
+      }
+
+      if (tempSlot !== null) {
+        // ホットバー → メインインベントリに移動
+        await bot.moveSlotItem(slotId, tempSlot);
+        await sleep(100);
+        needsRestore = true;
+      } else {
+        // 空きがない場合は手動でclickWindowを使う
+        return await depositItemManual({ bot, chest, item, sourceItem, slotId, log });
+      }
+    }
 
     // Promiseでラップしてコールバックの完了を待つ
     await new Promise((resolve, reject) => {
@@ -123,6 +146,70 @@ export async function depositItem({ bot, chest, item, log }) {
     });
 
     await sleep(100);
+
+    // 格納後の確認
+    const updatedItems = bot.inventory.items();
+    const updatedItem = updatedItems.find(i => needsRestore ? i.slot === tempSlot : i.slot === slotId);
+    const countAfter = updatedItem ? updatedItem.count : 0;
+    const actualMoved = countBefore - countAfter;
+
+    return {
+      success: actualMoved > 0,
+      moved: actualMoved,
+      deposited: actualMoved > 0
+    };
+  } catch (err) {
+    return { success: false, moved: 0, error: err.message };
+  }
+}
+
+/**
+ * 手動でアイテムを格納（ホットバー用フォールバック）
+ */
+async function depositItemManual({ bot, chest, item, sourceItem, slotId, log }) {
+  const countBefore = item.count;
+  const window = bot.currentWindow;
+
+  try {
+    // ウィンドウスロットに変換
+    let sourceWindowSlot;
+    if (slotId >= 0 && slotId < 9) {
+      sourceWindowSlot = 54 + slotId;
+    } else if (slotId >= 9 && slotId <= 35) {
+      sourceWindowSlot = 27 + (slotId - 9);
+    } else if (slotId >= 36 && slotId <= 44) {
+      sourceWindowSlot = 54 + (slotId - 36);
+    } else {
+      return { success: false, moved: 0, error: `無効なスロット: ${slotId}` };
+    }
+
+    // アイテムを掴む
+    await bot.clickWindow(sourceWindowSlot, 0, 0);
+    await sleep(50);
+
+    // チェストの空きスロットを探す
+    let destSlot = null;
+    for (let i = 0; i < window.inventoryStart; i++) {
+      const slot = window.slots[i];
+      if (!slot) {
+        destSlot = i;
+        break;
+      } else if (slot.type === sourceItem.type && slot.count < (slot.stackSize || 64)) {
+        destSlot = i;
+        break;
+      }
+    }
+
+    if (destSlot !== null) {
+      await bot.clickWindow(destSlot, 0, 0);
+      await sleep(50);
+    } else {
+      // 空きがない場合は戻す
+      await bot.clickWindow(sourceWindowSlot, 0, 0);
+      await sleep(50);
+    }
+
+    await sleep(200);
 
     // 格納後の確認
     const updatedItems = bot.inventory.items();
