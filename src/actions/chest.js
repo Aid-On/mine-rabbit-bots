@@ -1,5 +1,6 @@
 import { acquireLock, sleep } from '../lib/utils.js';
 import { openNearestChest } from '../lib/containers.js';
+import { depositAllItems } from '../lib/chest-operations.js';
 
 export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('chest', ({ args, sender }) => {
@@ -25,209 +26,21 @@ export function register(bot, commandHandlers, ctx) {
           const release = await acquireLock('chest');
           try {
             const chest = await openNearestChest(bot, ctx.mcData(), ctx.gotoBlock);
-            await sleep(300); // チェストが完全に開くのを待つ
+            await sleep(300);
             ctx.log?.('チェストを開きました');
 
-            // チェストの状態を分析
-            const analyzeChest = () => {
-              const chestSlots = [];
-              try {
-                // チェスト内のアイテムを取得
-                if (typeof chest.containerItems === 'function') {
-                  chestSlots.push(...chest.containerItems());
-                } else if (typeof chest.items === 'function') {
-                  chestSlots.push(...chest.items());
-                } else if (chest.window?.slots) {
-                  // windowからスロットを取得（チェスト部分のみ）
-                  const containerStart = chest.window.inventoryStart || 0;
-                  const containerEnd = chest.window.inventoryEnd || chest.window.slots.length;
-                  for (let i = containerStart; i < containerEnd; i++) {
-                    const slot = chest.window.slots[i];
-                    if (slot) chestSlots.push(slot);
-                  }
-                }
-              } catch (err) {
-                ctx.log?.(`チェスト分析エラー: ${err.message}`);
-              }
-
-              // チェストの総スロット数（通常チェスト=27, ラージチェスト=54）
-              const totalSlots = chest.window?.slots ?
-                (chest.window.inventoryEnd - chest.window.inventoryStart) : 27;
-
-              const emptySlots = totalSlots - chestSlots.length;
-
-              // アイテムタイプごとの最大スタック可能数を集計
-              const stackableSpace = new Map(); // type -> 追加可能数
-              for (const slot of chestSlots) {
-                const maxStack = slot.stackSize || 64;
-                const remaining = maxStack - slot.count;
-                if (remaining > 0) {
-                  const current = stackableSpace.get(slot.type) || 0;
-                  stackableSpace.set(slot.type, current + remaining);
-                }
-              }
-
-              return { totalSlots, emptySlots, chestSlots, stackableSpace };
-            };
-
-            // 装備・手持ちを除外するスロット
-            const getExcludedSlots = () => {
-              const excluded = new Set();
-              if (bot.heldItem?.slot != null) excluded.add(bot.heldItem.slot);
-              const equipSlots = ['head', 'torso', 'legs', 'feet'];
-              for (const slot of equipSlots) {
-                try {
-                  const slotNum = bot.getEquipmentDestSlot?.(slot);
-                  if (slotNum != null) excluded.add(slotNum);
-                } catch (_) {}
-              }
-              if (bot.inventory?.slots?.[45]) excluded.add(45);
-              return excluded;
-            };
-
-            let totalMoved = 0;
-            let totalSkipped = 0;
-
-            // 最大5回ループ
-            for (let round = 1; round <= 5; round++) {
-              // チェストの状態を分析
-              const chestInfo = analyzeChest();
-              ctx.log?.(`ラウンド${round}: チェスト状態 - 空き${chestInfo.emptySlots}/${chestInfo.totalSlots}スロット`);
-
-              // 空きスロットが0なら終了
-              if (chestInfo.emptySlots === 0 && chestInfo.stackableSpace.size === 0) {
-                ctx.log?.('チェストが完全に満杯です');
-                say('チェストが満杯のため、これ以上格納できません');
-                break;
-              }
-
-              const excludedSlots = getExcludedSlots();
-              const items = bot.inventory.items().filter(item => !excludedSlots.has(item.slot));
-
-              if (items.length === 0) {
-                ctx.log?.(`インベントリが空です`);
-                break;
-              }
-
-              ctx.log?.(`${items.length}種類のアイテムを処理`);
-              let roundMoved = 0;
-              let roundSkipped = 0;
-
-              // アイテムを優先度順にソート
-              // 1. 既にチェストにあるアイテム（スタック可能）
-              // 2. 新しいアイテム
-              const sortedItems = items.sort((a, b) => {
-                const aStackable = chestInfo.stackableSpace.get(a.type) || 0;
-                const bStackable = chestInfo.stackableSpace.get(b.type) || 0;
-                return bStackable - aStackable;
-              });
-
-              for (const item of sortedItems) {
-                // スタック可能スペースまたは空きスロットがあるかチェック
-                const stackableSpace = chestInfo.stackableSpace.get(item.type) || 0;
-                const canDeposit = stackableSpace > 0 || chestInfo.emptySlots > 0;
-
-                if (!canDeposit) {
-                  ctx.log?.(`  ⊗ ${ctx.getJaItemName(item.name)} x${item.count} - チェストに空きなし（スキップ）`);
-                  roundSkipped++;
-                  continue;
-                }
-
-                try {
-                  const countBefore = item.count;
-                  const slotId = item.slot;
-
-                  // bot.inventory経由でアイテムを取得
-                  const sourceItem = bot.inventory.slots[slotId];
-                  if (!sourceItem) {
-                    ctx.log?.(`  - ${ctx.getJaItemName(item.name)} スロット${slotId}が空です`);
-                    roundSkipped++;
-                    continue;
-                  }
-
-                  // bot.clickWindowを使って直接転送
-                  // chest.windowでのインベントリスロット番号に変換
-                  const windowSlot = chest.window.inventoryStart + slotId;
-
-                  // アイテムをクリックして掴む（左クリック）
-                  await bot.clickWindow(windowSlot, 0, 0);
-                  await sleep(50);
-
-                  // チェストの空きスロットまたはスタック可能スロットを探す
-                  const containerStart = 0;
-                  const containerEnd = chest.window.inventoryStart;
-                  let deposited = false;
-
-                  for (let destSlot = containerStart; destSlot < containerEnd; destSlot++) {
-                    const destItem = chest.window.slots[destSlot];
-
-                    if (!destItem) {
-                      // 空きスロットに配置
-                      await bot.clickWindow(destSlot, 0, 0);
-                      await sleep(50);
-                      deposited = true;
-                      break;
-                    } else if (destItem.type === sourceItem.type && destItem.count < (destItem.stackSize || 64)) {
-                      // 同じアイテムにスタック
-                      await bot.clickWindow(destSlot, 0, 0);
-                      await sleep(50);
-                      deposited = true;
-                      break;
-                    }
-                  }
-
-                  // まだアイテムを持っている場合は元に戻す
-                  if (!deposited && bot.currentWindow?.selectedItem) {
-                    await bot.clickWindow(windowSlot, 0, 0);
-                    await sleep(50);
-                  }
-
-                  await sleep(200);
-
-                  const updatedItems = bot.inventory.items();
-                  const updatedItem = updatedItems.find(i => i.slot === slotId);
-                  const countAfter = updatedItem ? updatedItem.count : 0;
-                  const actualMoved = countBefore - countAfter;
-
-                  if (actualMoved > 0) {
-                    ctx.log?.(`  ✓ ${ctx.getJaItemName(item.name)} x${actualMoved} を格納`);
-                    roundMoved += actualMoved;
-
-                    // チェスト情報を更新
-                    if (stackableSpace > 0) {
-                      const newStackable = Math.max(0, stackableSpace - actualMoved);
-                      chestInfo.stackableSpace.set(item.type, newStackable);
-                    } else {
-                      chestInfo.emptySlots = Math.max(0, chestInfo.emptySlots - 1);
-                    }
-                  } else {
-                    ctx.log?.(`  - ${ctx.getJaItemName(item.name)} は格納できませんでした`);
-                    roundSkipped++;
-                  }
-                } catch (err) {
-                  ctx.log?.(`  ✗ ${ctx.getJaItemName(item.name)} の格納に失敗: ${err.message}`);
-                  console.error('[chest all] deposit error:', err);
-                  roundSkipped++;
-                }
-              }
-
-              totalMoved += roundMoved;
-              totalSkipped += roundSkipped;
-
-              ctx.log?.(`ラウンド${round}完了: 格納${roundMoved}個, スキップ${roundSkipped}個`);
-
-              // このラウンドで何も格納できなければ終了
-              if (roundMoved === 0) {
-                ctx.log?.('これ以上格納できません');
-                break;
-              }
-
-              await sleep(300);
-            }
+            // ビジネスロジックを呼び出し
+            const { totalMoved, totalSkipped } = await depositAllItems({
+              bot,
+              chest,
+              getJaItemName: ctx.getJaItemName,
+              log: ctx.log
+            });
 
             chest.close();
             ctx.log?.('チェストを閉じました');
 
+            // 結果を報告
             if (totalSkipped > 0) {
               say(`一括格納完了: ${totalMoved}個を格納（${totalSkipped}個は格納できませんでした）`);
             } else {
@@ -241,8 +54,6 @@ export function register(bot, commandHandlers, ctx) {
           }
           return;
         }
-
-        // take / withdraw
         if (sub === 'take' || sub === 'withdraw') {
           const chest = await openNearestChest(bot, ctx.mcData(), ctx.gotoBlock);
           const token = normalizeTok(rest[0]);
