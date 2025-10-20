@@ -116,6 +116,17 @@ export async function depositItem({ bot, chest, item, log }) {
     // bot.currentWindowを使ってクリック操作でアイテムを転送
     const window = bot.currentWindow;
 
+    // カーソルにアイテムが残っていたらクリア
+    if (window.selectedItem) {
+      console.error(`[DEPOSIT] Clearing carried item: ${window.selectedItem.name} x${window.selectedItem.count}`);
+      // 元のスロットに戻すため、任意の空きスロットをクリック（2回クリックで戻る）
+      const emptySlot = window.slots.findIndex((slot, idx) => !slot && idx >= window.inventoryStart);
+      if (emptySlot !== -1) {
+        await bot.clickWindow(emptySlot, 0, 0);
+        await sleep(50);
+      }
+    }
+
     // インベントリスロットをウィンドウスロットに変換
     // inventory slot 0-8: ホットバー → window slot 54-62
     // inventory slot 9-35: メインインベントリ → window slot 27-53
