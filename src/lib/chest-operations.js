@@ -116,42 +116,33 @@ export async function depositItem({ bot, chest, item, log }) {
     // bot.currentWindowを使ってクリック操作でアイテムを転送
     const window = bot.currentWindow;
 
-    // カーソルにアイテムが残っていたらクリア（チェストに優先的に格納）
-    if (window.selectedItem) {
-      console.error(`[DEPOSIT] Clearing carried item: ${window.selectedItem.name} x${window.selectedItem.count}`);
+    // カーソル状態をデバッグ
+    console.error(`[DEPOSIT] Cursor state check:`);
+    console.error(`[DEPOSIT]   window.selectedItem: ${window.selectedItem ? `${window.selectedItem.name} x${window.selectedItem.count}` : 'null'}`);
 
-      // まずチェスト内の空きまたはスタック可能なスロットを探す
-      let clearSlot = null;
-      for (let i = 0; i < window.inventoryStart; i++) {
-        const slot = window.slots[i];
-        if (!slot) {
-          clearSlot = i;
-          console.error(`[DEPOSIT] Found empty chest slot for carried item: ${i}`);
-          break;
-        } else if (slot.type === window.selectedItem.type && slot.count < (slot.stackSize || 64)) {
-          clearSlot = i;
-          console.error(`[DEPOSIT] Found stackable chest slot for carried item: ${i}`);
-          break;
-        }
-      }
+    // カーソルクリア：window.selectedItemがnullでもカーソルにアイテムが残っている場合があるため、
+    // 無条件で空のチェストスロットをクリックしてカーソルをクリアする
+    console.error(`[DEPOSIT] Attempting to clear cursor unconditionally...`);
 
-      if (clearSlot !== null) {
-        await bot.clickWindow(clearSlot, 0, 0);
-        await sleep(50);
-        console.error(`[DEPOSIT] Cleared carried item to chest slot ${clearSlot}`);
-      } else {
-        // チェストに空きがない場合のみインベントリに戻す
-        console.error(`[DEPOSIT] No space in chest for carried item, trying inventory`);
-        const invSlot = window.slots.findIndex((slot, idx) => !slot && idx >= window.inventoryStart && idx < window.inventoryEnd);
-        if (invSlot !== -1) {
-          await bot.clickWindow(invSlot, 0, 0);
-          await sleep(50);
-          console.error(`[DEPOSIT] Cleared carried item to inventory slot ${invSlot}`);
-        } else {
-          console.error(`[DEPOSIT] WARNING: Cannot clear carried item - no space anywhere!`);
-          return { success: false, moved: 0, error: 'カーソルにアイテムが残っており、空きスロットがありません' };
-        }
+    // チェスト内の空きスロットを探す
+    let clearSlot = null;
+    for (let i = 0; i < window.inventoryStart; i++) {
+      const slot = window.slots[i];
+      if (!slot) {
+        clearSlot = i;
+        console.error(`[DEPOSIT] Found empty chest slot for cursor clear: ${i}`);
+        break;
       }
+    }
+
+    if (clearSlot !== null) {
+      // 空のスロットをクリック（カーソルにアイテムがあれば配置、なければ何も起こらない）
+      await bot.clickWindow(clearSlot, 0, 0);
+      await sleep(100);
+      console.error(`[DEPOSIT] Clicked empty slot ${clearSlot} to clear cursor`);
+    } else {
+      console.error(`[DEPOSIT] WARNING: No empty slot in chest for cursor clear`);
+      // チェストに空きがない場合は処理を続行（カーソルに何もないことを祈る）
     }
 
     // インベントリスロットをウィンドウスロットに変換
@@ -239,6 +230,9 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
 
   // 最大5回ループ
   for (let round = 1; round <= 5; round++) {
+    // 状態が更新されるまで少し待つ
+    await sleep(200);
+
     // チェストの状態を分析
     const chestInfo = analyzeChest(chest);
     log?.(`ラウンド${round}: チェスト状態 - 空き${chestInfo.emptySlots}/${chestInfo.totalSlots}スロット`);
