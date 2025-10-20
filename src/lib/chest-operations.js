@@ -91,20 +91,25 @@ export function sortItemsByPriority(items, stackableSpace) {
  * @returns {Object} { success, moved, error }
  */
 export async function depositItem({ bot, chest, item, log }) {
+  console.error(`[DEPOSIT] Called for ${item.name}`);
+
   const countBefore = item.count;
   const slotId = item.slot;
 
   // チェストの状態を検証
   if (!chest || !chest.window) {
+    console.error(`[DEPOSIT] chest.window is invalid:`, { chest: !!chest, window: !!chest?.window });
     return { success: false, moved: 0, error: 'chest is closed or invalid' };
   }
 
   // bot.inventory経由でアイテムを取得
   const sourceItem = bot.inventory.slots[slotId];
   if (!sourceItem) {
+    console.error(`[DEPOSIT] sourceItem not found at slot ${slotId}`);
     return { success: false, moved: 0, error: `スロット${slotId}が空` };
   }
 
+  console.error(`[DEPOSIT] About to putAway slot ${slotId}, item type=${sourceItem.type}, count=${sourceItem.count}`);
   log?.(`    [DEBUG] Attempting deposit: ${item.name} from slot ${slotId}, type=${sourceItem.type}, count=${sourceItem.count}`);
   log?.(`    [DEBUG] Window info: inventoryStart=${chest.window.inventoryStart}, inventoryEnd=${chest.window.inventoryEnd}`);
 
@@ -194,7 +199,7 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
           chestInfo.emptySlots = Math.max(0, chestInfo.emptySlots - 1);
         }
       } else {
-        log?.(`  - ${getJaItemName(item.name)} は格納できませんでした`);
+        log?.(`  - ${getJaItemName(item.name)} は格納できませんでした (理由: ${result.error || 'unknown'})`);
         roundSkipped++;
       }
     }
