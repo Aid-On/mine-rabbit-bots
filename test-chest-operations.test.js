@@ -116,7 +116,7 @@ let passedTests = 0;
   }
 }
 
-// Test 4: getExcludedSlots - with held item
+// Test 4: getExcludedSlots - with held item (no longer excluded)
 {
   totalTests++;
   const slots = new Array(46).fill(null);
@@ -131,14 +131,14 @@ let passedTests = 0;
   const result = getExcludedSlots(mockBot);
 
   const passed =
-    result.has(36) &&
-    result.has(45) &&
-    result.size === 2; // held item + offhand
+    !result.has(36) &&  // heldItem は除外しない
+    result.has(45) &&   // offhand は除外
+    result.size === 1;  // offhand のみ
 
-  if (testResult('getExcludedSlots - with held item', passed)) {
+  if (testResult('getExcludedSlots - held item NOT excluded', passed)) {
     passedTests++;
   } else {
-    console.log(`  Expected: Set with slot 36 and 45 (offhand)`);
+    console.log(`  Expected: Set with only slot 45 (offhand), not 36 (heldItem)`);
     console.log(`  Got: Set(${Array.from(result).join(', ')})`);
   }
 }

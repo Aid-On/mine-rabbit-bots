@@ -52,10 +52,12 @@ export function analyzeChest(chest) {
 export function getExcludedSlots(bot) {
   const excluded = new Set();
 
-  if (bot.heldItem?.slot != null) {
-    excluded.add(bot.heldItem.slot);
-  }
+  // 手に持っているアイテムも格納対象に含める（除外しない）
+  // if (bot.heldItem?.slot != null) {
+  //   excluded.add(bot.heldItem.slot);
+  // }
 
+  // 装備品は除外（頭・胴・脚・足）
   const equipSlots = ['head', 'torso', 'legs', 'feet'];
   for (const slot of equipSlots) {
     try {
@@ -64,6 +66,7 @@ export function getExcludedSlots(bot) {
     } catch (_) {}
   }
 
+  // オフハンドは除外
   if (bot.inventory?.slots?.[45]) {
     excluded.add(45);
   }
