@@ -25,16 +25,55 @@ export function register(bot, commandHandlers, ctx) {
           const release = await acquireLock('chest');
           try {
             const chest = await openNearestChest(bot, ctx.mcData(), ctx.gotoBlock);
+            await sleep(300); // チェストが完全に開くのを待つ
             ctx.log?.('チェストを開きました');
+
+            // チェストの状態を分析
+            const analyzeChest = () => {
+              const chestSlots = [];
+              try {
+                // チェスト内のアイテムを取得
+                if (typeof chest.containerItems === 'function') {
+                  chestSlots.push(...chest.containerItems());
+                } else if (typeof chest.items === 'function') {
+                  chestSlots.push(...chest.items());
+                } else if (chest.window?.slots) {
+                  // windowからスロットを取得（チェスト部分のみ）
+                  const containerStart = chest.window.inventoryStart || 0;
+                  const containerEnd = chest.window.inventoryEnd || chest.window.slots.length;
+                  for (let i = containerStart; i < containerEnd; i++) {
+                    const slot = chest.window.slots[i];
+                    if (slot) chestSlots.push(slot);
+                  }
+                }
+              } catch (err) {
+                ctx.log?.(`チェスト分析エラー: ${err.message}`);
+              }
+
+              // チェストの総スロット数（通常チェスト=27, ラージチェスト=54）
+              const totalSlots = chest.window?.slots ?
+                (chest.window.inventoryEnd - chest.window.inventoryStart) : 27;
+
+              const emptySlots = totalSlots - chestSlots.length;
+
+              // アイテムタイプごとの最大スタック可能数を集計
+              const stackableSpace = new Map(); // type -> 追加可能数
+              for (const slot of chestSlots) {
+                const maxStack = slot.stackSize || 64;
+                const remaining = maxStack - slot.count;
+                if (remaining > 0) {
+                  const current = stackableSpace.get(slot.type) || 0;
+                  stackableSpace.set(slot.type, current + remaining);
+                }
+              }
+
+              return { totalSlots, emptySlots, chestSlots, stackableSpace };
+            };
 
             // 装備・手持ちを除外するスロット
             const getExcludedSlots = () => {
               const excluded = new Set();
-              // 手持ちアイテム
-              if (bot.heldItem?.slot != null) {
-                excluded.add(bot.heldItem.slot);
-              }
-              // 装備品
+              if (bot.heldItem?.slot != null) excluded.add(bot.heldItem.slot);
               const equipSlots = ['head', 'torso', 'legs', 'feet'];
               for (const slot of equipSlots) {
                 try {
@@ -42,40 +81,68 @@ export function register(bot, commandHandlers, ctx) {
                   if (slotNum != null) excluded.add(slotNum);
                 } catch (_) {}
               }
-              // オフハンド（スロット45）
-              if (bot.inventory?.slots?.[45]) {
-                excluded.add(45);
-              }
+              if (bot.inventory?.slots?.[45]) excluded.add(45);
               return excluded;
             };
 
             let totalMoved = 0;
-            let totalFailed = 0;
+            let totalSkipped = 0;
 
-            // 最大5回ループ（通常は1-2回で完了するはず）
+            // 最大5回ループ
             for (let round = 1; round <= 5; round++) {
+              // チェストの状態を分析
+              const chestInfo = analyzeChest();
+              ctx.log?.(`ラウンド${round}: チェスト状態 - 空き${chestInfo.emptySlots}/${chestInfo.totalSlots}スロット`);
+
+              // 空きスロットが0なら終了
+              if (chestInfo.emptySlots === 0 && chestInfo.stackableSpace.size === 0) {
+                ctx.log?.('チェストが完全に満杯です');
+                say('チェストが満杯のため、これ以上格納できません');
+                break;
+              }
+
               const excludedSlots = getExcludedSlots();
               const items = bot.inventory.items().filter(item => !excludedSlots.has(item.slot));
 
               if (items.length === 0) {
-                ctx.log?.(`ラウンド${round}: インベントリが空です`);
+                ctx.log?.(`インベントリが空です`);
                 break;
               }
 
-              ctx.log?.(`ラウンド${round}: ${items.length}種類のアイテムを処理`);
+              ctx.log?.(`${items.length}種類のアイテムを処理`);
               let roundMoved = 0;
-              let roundFailed = 0;
+              let roundSkipped = 0;
 
-              for (const item of items) {
+              // アイテムを優先度順にソート
+              // 1. 既にチェストにあるアイテム（スタック可能）
+              // 2. 新しいアイテム
+              const sortedItems = items.sort((a, b) => {
+                const aStackable = chestInfo.stackableSpace.get(a.type) || 0;
+                const bStackable = chestInfo.stackableSpace.get(b.type) || 0;
+                return bStackable - aStackable;
+              });
+
+              for (const item of sortedItems) {
+                // スタック可能スペースまたは空きスロットがあるかチェック
+                const stackableSpace = chestInfo.stackableSpace.get(item.type) || 0;
+                const canDeposit = stackableSpace > 0 || chestInfo.emptySlots > 0;
+
+                if (!canDeposit) {
+                  ctx.log?.(`  ⊗ ${ctx.getJaItemName(item.name)} x${item.count} - チェストに空きなし（スキップ）`);
+                  roundSkipped++;
+                  continue;
+                }
+
                 try {
-                  // 現在の所持数を記録
                   const countBefore = item.count;
 
-                  // チェストに預ける
-                  await chest.deposit(item.type, null, countBefore);
-                  await sleep(200); // 処理完了を待つ
+                  // 格納可能数を計算
+                  const maxCanDeposit = Math.max(stackableSpace, item.count);
+                  const depositAmount = Math.min(item.count, maxCanDeposit);
 
-                  // 預けた後の所持数を確認
+                  await chest.deposit(item.type, null, depositAmount);
+                  await sleep(250);
+
                   const updatedItems = bot.inventory.items();
                   const updatedItem = updatedItems.find(i => i.slot === item.slot);
                   const countAfter = updatedItem ? updatedItem.count : 0;
@@ -84,24 +151,32 @@ export function register(bot, commandHandlers, ctx) {
                   if (actualMoved > 0) {
                     ctx.log?.(`  ✓ ${ctx.getJaItemName(item.name)} x${actualMoved} を格納`);
                     roundMoved += actualMoved;
+
+                    // チェスト情報を更新
+                    if (stackableSpace > 0) {
+                      const newStackable = Math.max(0, stackableSpace - actualMoved);
+                      chestInfo.stackableSpace.set(item.type, newStackable);
+                    } else {
+                      chestInfo.emptySlots = Math.max(0, chestInfo.emptySlots - 1);
+                    }
                   } else {
-                    ctx.log?.(`  - ${ctx.getJaItemName(item.name)} は格納できませんでした（チェスト満杯の可能性）`);
-                    roundFailed++;
+                    ctx.log?.(`  - ${ctx.getJaItemName(item.name)} は格納できませんでした`);
+                    roundSkipped++;
                   }
                 } catch (err) {
                   ctx.log?.(`  ✗ ${ctx.getJaItemName(item.name)} の格納に失敗: ${err.message}`);
-                  roundFailed++;
+                  roundSkipped++;
                 }
               }
 
               totalMoved += roundMoved;
-              totalFailed += roundFailed;
+              totalSkipped += roundSkipped;
 
-              ctx.log?.(`ラウンド${round}完了: 格納${roundMoved}個, 失敗${roundFailed}個`);
+              ctx.log?.(`ラウンド${round}完了: 格納${roundMoved}個, スキップ${roundSkipped}個`);
 
               // このラウンドで何も格納できなければ終了
               if (roundMoved === 0) {
-                ctx.log?.('これ以上格納できません。処理を終了します');
+                ctx.log?.('これ以上格納できません');
                 break;
               }
 
@@ -111,9 +186,8 @@ export function register(bot, commandHandlers, ctx) {
             chest.close();
             ctx.log?.('チェストを閉じました');
 
-            // 結果を報告
-            if (totalFailed > 0) {
-              say(`一括格納完了: ${totalMoved}個を格納（${totalFailed}個は格納できませんでした）`);
+            if (totalSkipped > 0) {
+              say(`一括格納完了: ${totalMoved}個を格納（${totalSkipped}個は格納できませんでした）`);
             } else {
               say(`一括格納完了: ${totalMoved}個を格納`);
             }
