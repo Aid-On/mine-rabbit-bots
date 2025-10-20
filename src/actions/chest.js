@@ -25,6 +25,7 @@ export function register(bot, commandHandlers, ctx) {
           const release = await acquireLock('chest');
           try {
             const chest = await openNearestChest(bot, ctx.mcData(), ctx.gotoBlock);
+
             // 除外スロット（装備 / 手 / オフハンド）
             const exclude = new Set();
             try {
@@ -36,18 +37,63 @@ export function register(bot, commandHandlers, ctx) {
               }
               if (bot.inventory?.slots?.[45]) exclude.add(45);
             } catch (_) {}
-            const stacks = bot.inventory.items().filter((it) => it && !exclude.has(it.slot));
+
             let moved = 0;
-            for (const it of stacks) {
-              let ok = false;
-              for (let retry = 0; retry < 2 && !ok; retry++) {
-                try { await chest.deposit(it.type, it.metadata ?? null, it.count); ok = true; }
-                catch (_) { await sleep(200); }
+            let failed = 0;
+            let loops = 0;
+            const maxLoops = 10;
+
+            // チェストが満杯になるまで繰り返す
+            while (loops < maxLoops) {
+              loops++;
+
+              // 現在のインベントリを再取得
+              const stacks = bot.inventory.items().filter((it) => it && !exclude.has(it.slot));
+              if (stacks.length === 0) break;
+
+              let progressed = false;
+
+              for (const it of stacks) {
+                try {
+                  const beforeCount = it.count;
+                  await chest.deposit(it.type, it.metadata ?? null, it.count);
+
+                  // 格納後のアイテムを確認
+                  const afterItem = bot.inventory.items().find(i => i.slot === it.slot);
+                  const actualMoved = beforeCount - (afterItem?.count || 0);
+
+                  if (actualMoved > 0) {
+                    moved += actualMoved;
+                    progressed = true;
+                    ctx.log?.(`格納: ${ctx.getJaItemName(it.name)} x${actualMoved}`);
+                  }
+
+                  await sleep(100);
+                } catch (err) {
+                  ctx.log?.(`格納失敗: ${ctx.getJaItemName(it.name)} - ${err.message}`);
+                  failed++;
+
+                  // チェストが満杯の可能性が高い
+                  if (err.message?.includes('full') || err.message?.includes('No space')) {
+                    ctx.log?.('チェストが満杯です');
+                    break;
+                  }
+                }
               }
-              if (ok) { moved += it.count; await sleep(250); }
+
+              // 進捗がなければ終了（チェストが満杯など）
+              if (!progressed) break;
+              await sleep(100);
             }
+
             await sleep(200);
-            say(`一括格納: ${moved} 個をチェストへ`);
+
+            if (failed > 0) {
+              say(`一括格納: ${moved} 個をチェストへ（${failed} 個のアイテムは格納できませんでした）`);
+            } else {
+              say(`一括格納: ${moved} 個をチェストへ`);
+            }
+
             try { chest.close(); } catch (_) {}
           } finally { release(); }
           return;
