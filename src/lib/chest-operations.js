@@ -96,10 +96,10 @@ export async function depositItem({ bot, chest, item, log }) {
   const countBefore = item.count;
   const slotId = item.slot;
 
-  // チェストの状態を検証
-  if (!chest || !chest.window) {
-    console.error(`[DEPOSIT] chest.window is invalid:`, { chest: !!chest, window: !!chest?.window });
-    return { success: false, moved: 0, error: 'chest is closed or invalid' };
+  // チェストの状態を検証（window不要）
+  if (!chest) {
+    console.error(`[DEPOSIT] chest is invalid`);
+    return { success: false, moved: 0, error: 'chest is invalid' };
   }
 
   // bot.inventory経由でアイテムを取得
@@ -109,13 +109,11 @@ export async function depositItem({ bot, chest, item, log }) {
     return { success: false, moved: 0, error: `スロット${slotId}が空` };
   }
 
-  console.error(`[DEPOSIT] About to putAway slot ${slotId}, item type=${sourceItem.type}, count=${sourceItem.count}`);
-  log?.(`    [DEBUG] Attempting deposit: ${item.name} from slot ${slotId}, type=${sourceItem.type}, count=${sourceItem.count}`);
-  log?.(`    [DEBUG] Window info: inventoryStart=${chest.window.inventoryStart}, inventoryEnd=${chest.window.inventoryEnd}`);
+  console.error(`[DEPOSIT] About to deposit type=${sourceItem.type}, metadata=${sourceItem.metadata ?? null}, count=${sourceItem.count}`);
 
   try {
-    // bot.putAway()を使用 - これはスロット番号ではなくスロットIDで動作する
-    await bot.putAway(slotId);
+    // chest.deposit()を使用 - アイテムタイプで指定
+    await chest.deposit(sourceItem.type, sourceItem.metadata ?? null, sourceItem.count);
     await sleep(300);
 
     // 格納後の確認
@@ -124,7 +122,7 @@ export async function depositItem({ bot, chest, item, log }) {
     const countAfter = updatedItem ? updatedItem.count : 0;
     const actualMoved = countBefore - countAfter;
 
-    log?.(`    [DEBUG] After putAway: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
+    console.error(`[DEPOSIT] After deposit: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
 
     return {
       success: actualMoved > 0,
@@ -132,8 +130,8 @@ export async function depositItem({ bot, chest, item, log }) {
       deposited: actualMoved > 0
     };
   } catch (err) {
-    log?.(`    [ERROR] depositItem ${item.name}: ${err.message}`);
-    log?.(`    [ERROR] Stack trace: ${err.stack}`);
+    console.error(`[DEPOSIT] Error: ${err.message}`);
+    console.error(`[DEPOSIT] Stack: ${err.stack}`);
     return { success: false, moved: 0, error: err.message };
   }
 }
