@@ -135,16 +135,16 @@ export function register(bot, commandHandlers, ctx) {
 
                 try {
                   const countBefore = item.count;
+                  const slotId = item.slot;
 
-                  // 格納可能数を計算
-                  const maxCanDeposit = Math.max(stackableSpace, item.count);
-                  const depositAmount = Math.min(item.count, maxCanDeposit);
+                  // chest.depositを使ってシンプルに格納
+                  // depositは内部で適切にスロットを処理してくれる
+                  await chest.deposit(item.type, null, countBefore);
 
-                  await chest.deposit(item.type, null, depositAmount);
                   await sleep(250);
 
                   const updatedItems = bot.inventory.items();
-                  const updatedItem = updatedItems.find(i => i.slot === item.slot);
+                  const updatedItem = updatedItems.find(i => i.slot === slotId);
                   const countAfter = updatedItem ? updatedItem.count : 0;
                   const actualMoved = countBefore - countAfter;
 
@@ -165,6 +165,7 @@ export function register(bot, commandHandlers, ctx) {
                   }
                 } catch (err) {
                   ctx.log?.(`  ✗ ${ctx.getJaItemName(item.name)} の格納に失敗: ${err.message}`);
+                  console.error('[chest all] deposit error:', err);
                   roundSkipped++;
                 }
               }
