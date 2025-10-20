@@ -105,44 +105,13 @@ export async function depositItem({ bot, chest, item, log }) {
     return { success: false, moved: 0, error: `スロット${slotId}が空` };
   }
 
+  log?.(`    [DEBUG] Attempting deposit: ${item.name} from slot ${slotId}, type=${sourceItem.type}, count=${sourceItem.count}`);
+  log?.(`    [DEBUG] Window info: inventoryStart=${chest.window.inventoryStart}, inventoryEnd=${chest.window.inventoryEnd}`);
+
   try {
-    // bot.clickWindowを使って直接転送
-    const windowSlot = chest.window.inventoryStart + slotId;
-
-    // アイテムをクリックして掴む
-    await bot.clickWindow(windowSlot, 0, 0);
-    await sleep(50);
-
-    // チェストの空きスロットまたはスタック可能スロットを探す
-    const containerStart = 0;
-    const containerEnd = chest.window.inventoryStart;
-    let deposited = false;
-
-    for (let destSlot = containerStart; destSlot < containerEnd; destSlot++) {
-      const destItem = chest.window.slots[destSlot];
-
-      if (!destItem) {
-        // 空きスロットに配置
-        await bot.clickWindow(destSlot, 0, 0);
-        await sleep(50);
-        deposited = true;
-        break;
-      } else if (destItem.type === sourceItem.type && destItem.count < (destItem.stackSize || 64)) {
-        // 同じアイテムにスタック
-        await bot.clickWindow(destSlot, 0, 0);
-        await sleep(50);
-        deposited = true;
-        break;
-      }
-    }
-
-    // まだアイテムを持っている場合は元に戻す
-    if (!deposited && bot.currentWindow?.selectedItem) {
-      await bot.clickWindow(windowSlot, 0, 0);
-      await sleep(50);
-    }
-
-    await sleep(200);
+    // bot.putAway()を使用 - これはスロット番号ではなくスロットIDで動作する
+    await bot.putAway(slotId);
+    await sleep(300);
 
     // 格納後の確認
     const updatedItems = bot.inventory.items();
@@ -150,13 +119,16 @@ export async function depositItem({ bot, chest, item, log }) {
     const countAfter = updatedItem ? updatedItem.count : 0;
     const actualMoved = countBefore - countAfter;
 
+    log?.(`    [DEBUG] After putAway: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
+
     return {
       success: actualMoved > 0,
       moved: actualMoved,
-      deposited
+      deposited: actualMoved > 0
     };
   } catch (err) {
-    log?.(`depositItem error: ${err.message}`);
+    log?.(`    [ERROR] depositItem ${item.name}: ${err.message}`);
+    log?.(`    [ERROR] Stack trace: ${err.stack}`);
     return { success: false, moved: 0, error: err.message };
   }
 }
