@@ -96,10 +96,10 @@ export async function depositItem({ bot, chest, item, log }) {
   const countBefore = item.count;
   const slotId = item.slot;
 
-  // チェストの状態を検証（window不要）
-  if (!chest) {
-    console.error(`[DEPOSIT] chest is invalid`);
-    return { success: false, moved: 0, error: 'chest is invalid' };
+  // currentWindowを検証
+  if (!bot.currentWindow) {
+    console.error(`[DEPOSIT] No window open`);
+    return { success: false, moved: 0, error: 'No window open' };
   }
 
   // bot.inventory経由でアイテムを取得
@@ -109,12 +109,49 @@ export async function depositItem({ bot, chest, item, log }) {
     return { success: false, moved: 0, error: `スロット${slotId}が空` };
   }
 
-  console.error(`[DEPOSIT] About to deposit type=${sourceItem.type}, metadata=${sourceItem.metadata ?? null}, count=${sourceItem.count}`);
+  console.error(`[DEPOSIT] About to transfer slot=${slotId}, type=${sourceItem.type}, count=${sourceItem.count}`);
+  console.error(`[DEPOSIT] Window: inventoryStart=${bot.currentWindow.inventoryStart}, inventoryEnd=${bot.currentWindow.inventoryEnd}`);
 
   try {
-    // chest.deposit()を使用 - アイテムタイプで指定
-    await chest.deposit(sourceItem.type, sourceItem.metadata ?? null, sourceItem.count);
-    await sleep(300);
+    // bot.currentWindowを使ってクリック操作でアイテムを転送
+    const window = bot.currentWindow;
+
+    // インベントリスロットをウィンドウスロットに変換
+    const sourceWindowSlot = window.inventoryStart + slotId;
+
+    console.error(`[DEPOSIT] Clicking source slot: ${sourceWindowSlot} (inventory slot ${slotId})`);
+
+    // アイテムを掴む
+    await bot.clickWindow(sourceWindowSlot, 0, 0);
+    await sleep(50);
+
+    // チェストの空きスロットを探す（0 ~ inventoryStart-1）
+    let destSlot = null;
+    for (let i = 0; i < window.inventoryStart; i++) {
+      const slot = window.slots[i];
+      if (!slot) {
+        // 空きスロット
+        destSlot = i;
+        break;
+      } else if (slot.type === sourceItem.type && slot.count < (slot.stackSize || 64)) {
+        // スタック可能
+        destSlot = i;
+        break;
+      }
+    }
+
+    if (destSlot !== null) {
+      console.error(`[DEPOSIT] Clicking dest slot: ${destSlot}`);
+      await bot.clickWindow(destSlot, 0, 0);
+      await sleep(50);
+    } else {
+      console.error(`[DEPOSIT] No space in chest, returning item`);
+      // 空きがない場合は戻す
+      await bot.clickWindow(sourceWindowSlot, 0, 0);
+      await sleep(50);
+    }
+
+    await sleep(200);
 
     // 格納後の確認
     const updatedItems = bot.inventory.items();
@@ -122,7 +159,7 @@ export async function depositItem({ bot, chest, item, log }) {
     const countAfter = updatedItem ? updatedItem.count : 0;
     const actualMoved = countBefore - countAfter;
 
-    console.error(`[DEPOSIT] After deposit: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
+    console.error(`[DEPOSIT] After transfer: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
 
     return {
       success: actualMoved > 0,
