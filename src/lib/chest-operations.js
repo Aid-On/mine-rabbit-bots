@@ -151,15 +151,19 @@ export async function depositItem({ bot, chest, item, log }) {
 
     // チェストの空きスロットを探す（0 ~ inventoryStart-1）
     let destSlot = null;
+    console.error(`[DEPOSIT] Searching for empty slot in chest (0 to ${window.inventoryStart - 1})`);
     for (let i = 0; i < window.inventoryStart; i++) {
       const slot = window.slots[i];
+      console.error(`[DEPOSIT] Slot ${i}: ${slot ? `${slot.name} x${slot.count}` : 'empty'}`);
       if (!slot) {
         // 空きスロット
         destSlot = i;
+        console.error(`[DEPOSIT] Found empty slot: ${i}`);
         break;
       } else if (slot.type === sourceItem.type && slot.count < (slot.stackSize || 64)) {
         // スタック可能
         destSlot = i;
+        console.error(`[DEPOSIT] Found stackable slot: ${i}`);
         break;
       }
     }
