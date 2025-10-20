@@ -97,14 +97,18 @@ export async function depositItem({ bot, chest, item, log }) {
   const countBefore = item.count;
   const slotId = item.slot;
 
+  console.error(`[DEPOSIT] Starting for slot ${slotId}: ${item.name} x${countBefore}`);
+
   // currentWindowを検証
   if (!bot.currentWindow) {
+    console.error(`[DEPOSIT] No window open`);
     return { success: false, moved: 0, error: 'No window open' };
   }
 
   // bot.inventory経由でアイテムを取得
   const sourceItem = bot.inventory.slots[slotId];
   if (!sourceItem) {
+    console.error(`[DEPOSIT] sourceItem not found at slot ${slotId}`);
     return { success: false, moved: 0, error: `スロット${slotId}が空` };
   }
 
@@ -128,6 +132,7 @@ export async function depositItem({ bot, chest, item, log }) {
 
     // Shift+クリックを使ってアイテムを転送
     // mode=1 はshift-click（アイテムを自動的に反対側のコンテナに移動）
+    console.error(`[DEPOSIT] Shift-clicking window slot ${sourceWindowSlot}`);
     await bot.clickWindow(sourceWindowSlot, 0, 1);
     await sleep(700); // インベントリ状態の更新を十分に待つ
 
@@ -136,6 +141,8 @@ export async function depositItem({ bot, chest, item, log }) {
     const updatedItem = updatedItems.find(i => i.slot === slotId);
     const countAfter = updatedItem ? updatedItem.count : 0;
     const actualMoved = countBefore - countAfter;
+
+    console.error(`[DEPOSIT] Result: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
 
     return {
       success: actualMoved > 0,
@@ -169,7 +176,16 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
     }
 
     const excludedSlots = getExcludedSlots(bot);
-    const items = bot.inventory.items().filter(item => !excludedSlots.has(item.slot));
+    const allItems = bot.inventory.items();
+    const items = allItems.filter(item => !excludedSlots.has(item.slot));
+
+    console.error(`[DEBUG] Round ${round}:`);
+    console.error(`[DEBUG]   All inventory items: ${allItems.length}`);
+    allItems.forEach(item => {
+      console.error(`[DEBUG]     Slot ${item.slot}: ${item.name} x${item.count}`);
+    });
+    console.error(`[DEBUG]   Excluded slots: ${Array.from(excludedSlots).join(', ')}`);
+    console.error(`[DEBUG]   Items after filtering: ${items.length}`);
 
     if (items.length === 0) {
       log?.('インベントリが空です');
