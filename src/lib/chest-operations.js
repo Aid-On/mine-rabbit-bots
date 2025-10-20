@@ -164,11 +164,6 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
 
   // 最大5回ループ
   for (let round = 1; round <= 5; round++) {
-    // ラウンド2以降は状態更新を待つ
-    if (round > 1) {
-      await sleep(500);
-    }
-
     // チェストの状態を分析
     const chestInfo = analyzeChest(chest);
     log?.(`ラウンド${round}: チェスト状態 - 空き${chestInfo.emptySlots}/${chestInfo.totalSlots}スロット`);
@@ -180,38 +175,7 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
     }
 
     const excludedSlots = getExcludedSlots(bot);
-
-    // window.slotsから直接インベントリアイテムを取得
-    // bot.inventory.items()はチェストを開いている間、更新されないため使用しない
-    const window = bot.currentWindow;
-    const allItems = [];
-
-    if (window && window.slots) {
-      // インベントリスロット範囲からアイテムを取得
-      for (let i = window.inventoryStart; i < window.inventoryEnd; i++) {
-        const slot = window.slots[i];
-        if (slot) {
-          // ウィンドウスロットをインベントリスロットに変換
-          let invSlot;
-          if (i >= 54 && i <= 62) {
-            // ホットバー（window 54-62 → inventory 0-8）
-            invSlot = i - 54;
-          } else if (i >= 27 && i <= 53) {
-            // メインインベントリ（window 27-53 → inventory 9-35）
-            invSlot = (i - 27) + 9;
-          } else {
-            continue;
-          }
-
-          allItems.push({
-            ...slot,
-            slot: invSlot,
-            windowSlot: i
-          });
-        }
-      }
-    }
-
+    const allItems = bot.inventory.items();
     const items = allItems.filter(item => !excludedSlots.has(item.slot));
 
     console.error(`[DEBUG] Round ${round}:`);
