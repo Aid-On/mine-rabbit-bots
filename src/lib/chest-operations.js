@@ -2,6 +2,69 @@
 import { sleep } from './utils.js';
 
 /**
+ * Ensure the cursor (selected item) is cleared by placing it into chest first,
+ * then into player's inventory if needed. Returns true if cleared or nothing to clear.
+ */
+export async function ensureCursorCleared({ bot, chest, log }) {
+  try {
+    const window = bot.currentWindow;
+    // 必要条件: 現在何らかのウィンドウが開いていること（チェストが望ましい）
+    if (!window) return false;
+
+    const selected = window.selectedItem;
+    if (!selected) return true; // Nothing to clear
+
+    const slots = window.slots || [];
+    const invStart = window.inventoryStart ?? 27;
+    const invEnd = Math.min(invStart + 27, slots.length); // main inventory end (exclusive)
+    const total = slots.length || 63;
+
+    const isSameStack = (a, b) => a && b && a.type === b.type && (a.metadata ?? null) === (b.metadata ?? null);
+
+    // 1) Try chest container area first: [0, invStart)
+    for (let i = 0; i < invStart; i++) {
+      const slot = slots[i];
+      if (!slot || isSameStack(slot, selected) && slot.count < (slot.stackSize || 64)) {
+        try {
+          await bot.clickWindow(i, 0, 0); // place carried item here
+          await sleep(80);
+          if (!window.selectedItem) return true;
+        } catch (_) {}
+      }
+    }
+
+    // 2) Try player main inventory area: [invStart, invEnd)
+    for (let i = invStart; i < invEnd; i++) {
+      const slot = slots[i];
+      if (!slot || isSameStack(slot, selected) && slot.count < (slot.stackSize || 64)) {
+        try {
+          await bot.clickWindow(i, 0, 0);
+          await sleep(80);
+          if (!window.selectedItem) return true;
+        } catch (_) {}
+      }
+    }
+
+    // 3) Try hotbar and the rest: [invEnd, total)
+    for (let i = invEnd; i < total; i++) {
+      const slot = slots[i];
+      if (!slot || isSameStack(slot, selected) && slot.count < (slot.stackSize || 64)) {
+        try {
+          await bot.clickWindow(i, 0, 0);
+          await sleep(80);
+          if (!window.selectedItem) return true;
+        } catch (_) {}
+      }
+    }
+
+    log?.('カーソルのクリアに失敗: 置き場所がありません');
+    return false;
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
  * チェストの状態を分析
  * @param {Object} chest - チェストオブジェクト
  * @returns {Object} { totalSlots, emptySlots, chestSlots, stackableSpace }
@@ -15,9 +78,9 @@ export function analyzeChest(chest) {
     } else if (typeof chest.items === 'function') {
       chestSlots.push(...chest.items());
     } else if (chest.window?.slots) {
-      const containerStart = chest.window.inventoryStart || 0;
-      const containerEnd = chest.window.inventoryEnd || chest.window.slots.length;
-      for (let i = containerStart; i < containerEnd; i++) {
+      // Container area is [0, inventoryStart)
+      const containerEnd = chest.window.inventoryStart || 0;
+      for (let i = 0; i < containerEnd; i++) {
         const slot = chest.window.slots[i];
         if (slot) chestSlots.push(slot);
       }
@@ -26,8 +89,8 @@ export function analyzeChest(chest) {
     console.error('チェスト分析エラー:', err.message);
   }
 
-  const totalSlots = chest.window?.slots ?
-    (chest.window.inventoryEnd - chest.window.inventoryStart) : 27;
+  // Total container slots are inventoryStart (index of first player inventory slot)
+  const totalSlots = chest.window?.slots ? (chest.window.inventoryStart || 27) : 27;
   const emptySlots = totalSlots - chestSlots.length;
 
   // アイテムタイプごとの最大スタック可能数を集計
@@ -97,57 +160,210 @@ export async function depositItem({ bot, chest, item, log }) {
   const countBefore = item.count;
   const slotId = item.slot;
 
-  console.error(`[DEPOSIT] Starting for slot ${slotId}: ${item.name} x${countBefore}`);
-
-  // currentWindowを検証
-  if (!bot.currentWindow) {
-    console.error(`[DEPOSIT] No window open`);
+  // Validate window state
+  const window = bot.currentWindow;
+  if (!window) {
+    return { success: false, moved: 0, error: 'No window open' };
+  }
+  if (chest && chest.window && window !== chest.window) {
     return { success: false, moved: 0, error: 'No window open' };
   }
 
   // bot.inventory経由でアイテムを取得
   const sourceItem = bot.inventory.slots[slotId];
   if (!sourceItem) {
-    console.error(`[DEPOSIT] sourceItem not found at slot ${slotId}`);
     return { success: false, moved: 0, error: `スロット${slotId}が空` };
   }
 
-  const window = bot.currentWindow;
-
+  // Clear any carried item first to avoid broken shift-click behavior
+  const preCleared = await ensureCursorCleared({ bot, chest, log });
+  if (!preCleared) {
+    return { success: false, moved: 0, error: 'cannot clear cursor' };
+  }
   try {
-    // ウィンドウスロット番号に変換
+    // If the item is in the currently selected hotbar slot, temporarily switch selection
+    try {
+      const qb = (typeof bot.quickBarSlot === 'number') ? bot.quickBarSlot : null;
+      let hotbarIdx = null;
+      if (slotId >= 36 && slotId <= 44) hotbarIdx = slotId - 36;
+      else if (slotId >= 0 && slotId <= 8) hotbarIdx = slotId;
+      if (qb != null && hotbarIdx != null && qb === hotbarIdx) {
+        const slots = bot.inventory?.slots || [];
+        let target = null;
+        for (let i = 0; i < 9; i++) {
+          if (i === qb) continue;
+          const s = slots[36 + i];
+          if (!s) { target = i; break; }
+        }
+        if (target == null) target = (qb + 1) % 9;
+        if (typeof bot.setQuickBarSlot === 'function') {
+          bot.setQuickBarSlot(target);
+          await sleep(120);
+        }
+      }
+    } catch (_) {}
+
+    // Measure total items of this type in inventory BEFORE (type-level; metadata can vary in modern MC)
+    const totalOfTypeBefore = (() => {
+      try {
+        const list = typeof bot.inventory.items === 'function' ? bot.inventory.items() : [];
+        return list.filter(i => i && i.type === item.type).reduce((a, b) => a + (b.count || 0), 0);
+      } catch (_) { return 0; }
+    })();
+    // Debug window layout
+    try {
+      const dbgSlotsLen = window.slots?.length ?? -1;
+      const dbgInvStart = window.inventoryStart;
+      const dbgInvEnd = window.inventoryEnd;
+      console.error(`[DEPOSIT][DBG] item=${item.name} slotId=${slotId} invStart=${dbgInvStart} invEnd=${dbgInvEnd} slotsLen=${dbgSlotsLen}`);
+    } catch (_) {}
+    // まずはAPIの deposit を優先的に使用（ウィンドウレイアウト差異に強い）
+    if (chest && typeof chest.deposit === 'function') {
+      const meta = sourceItem.metadata ?? null;
+      const listNow = typeof bot.inventory.items === 'function' ? bot.inventory.items() : [];
+      const totalBeforeType = listNow.filter(i => i && i.type === sourceItem.type && (i.metadata ?? null) === meta)
+                                    .reduce((a, b) => a + (b.count || 0), 0);
+      try {
+        await chest.deposit(sourceItem.type, meta, countBefore);
+        await sleep(150);
+        const listAfter = typeof bot.inventory.items === 'function' ? bot.inventory.items() : [];
+        const totalAfterType = listAfter.filter(i => i && i.type === sourceItem.type && (i.metadata ?? null) === meta)
+                                       .reduce((a, b) => a + (b.count || 0), 0);
+        const movedApi = Math.max(0, totalBeforeType - totalAfterType);
+        if (movedApi > 0) {
+          if (window.selectedItem) await ensureCursorCleared({ bot, chest, log });
+          return { success: true, moved: movedApi, deposited: true };
+        }
+        // depositが無音失敗した場合はフォールバックへ
+      } catch (e) {
+        // API失敗時はフォールバックへ
+      }
+    }
+
+    // Convert inventory slot to window slot using window indices
     let sourceWindowSlot;
-    if (slotId >= 0 && slotId < 9) {
-      // ホットバー下段（インベントリ番号0-8）
-      sourceWindowSlot = 54 + slotId;
-    } else if (slotId >= 9 && slotId <= 35) {
-      // メインインベントリ（インベントリ番号9-35）
-      sourceWindowSlot = 27 + (slotId - 9);
+    const invStart = window.inventoryStart ?? 27; // first player inventory slot in window
+    const mainInvSize = 27; // player's main inventory slots count is always 27
+    const hotbarSize = 9;
+    const invEnd = invStart + mainInvSize; // end of main inventory (exclusive)
+    const hotbarStart = invEnd; // hotbar starts right after main inventory in window
+    if (slotId >= 9 && slotId <= 35) {
+      // Main inventory 9-35
+      sourceWindowSlot = invStart + (slotId - 9);
     } else if (slotId >= 36 && slotId <= 44) {
-      // ホットバー上段（インベントリ番号36-44は実際には0-8と同じ）
-      sourceWindowSlot = 54 + (slotId - 36);
+      // Hotbar 36-44
+      sourceWindowSlot = hotbarStart + (slotId - 36);
+    } else if (slotId >= 0 && slotId < 9) {
+      // Hotbar 0-8 variant
+      sourceWindowSlot = hotbarStart + slotId;
     } else {
       return { success: false, moved: 0, error: `無効なスロット: ${slotId}` };
     }
+    console.error(`[DEPOSIT][DBG] item=${item.name} srcWinSlot=${sourceWindowSlot} hotbarStart=${hotbarStart}`);
 
-    // Shift+クリックを使ってアイテムを転送
-    // mode=1 はshift-click（アイテムを自動的に反対側のコンテナに移動）
-    console.error(`[DEPOSIT] Shift-clicking window slot ${sourceWindowSlot}`);
+    const preferManual = false; // 常にAPI→クリック→手動の順にフォールバック
+
+    // 1) Always try API deposit first (mineflayer handles edge cases)
+    if (chest && typeof chest.deposit === 'function') {
+      try {
+        await chest.deposit(item.type, item.metadata ?? null, countBefore);
+        await sleep(240);
+      } catch (_) {}
+    }
+
+    // 2) Shift-click transfer
     await bot.clickWindow(sourceWindowSlot, 0, 1);
-    await sleep(500); // インベントリ状態の更新を待つ
+    await sleep(240);
 
-    // 格納後の確認：window.slotsを使う方が更新が早い
-    const updatedSlot = window.slots[sourceWindowSlot];
-    const countAfter = updatedSlot ? updatedSlot.count : 0;
-    const actualMoved = countBefore - countAfter;
+    // Check result
+    let updatedSlot = window.slots[sourceWindowSlot];
+    let countAfter = updatedSlot ? updatedSlot.count : 0;
+    let actualMoved = Math.max(0, countBefore - countAfter);
 
-    console.error(`[DEPOSIT] Result: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
+    // Fallback/manual path
+    if (actualMoved === 0) {
+      const invStart = window.inventoryStart ?? 27;
+      const invEnd = window.inventoryEnd ?? 54;
+      const slots = window.slots || [];
+      const isSameStack = (a, b) => a && b && a.type === b.type && (a.metadata ?? null) === (b.metadata ?? null);
 
-    return {
-      success: actualMoved > 0,
-      moved: actualMoved,
-      deposited: actualMoved > 0
-    };
+      // 3) Try moveSlotItem directly to an empty chest slot
+      let dest = -1;
+      for (let i = 0; i < invStart; i++) { if (!slots[i]) { dest = i; break; } }
+      if (dest !== -1 && typeof bot.moveSlotItem === 'function') {
+        try {
+          await bot.moveSlotItem(sourceWindowSlot, dest);
+          await sleep(260);
+          const listAfter = typeof bot.inventory.items === 'function' ? bot.inventory.items() : [];
+          const totalAfterTypeTry = listAfter.filter(i => i && i.type === item.type).reduce((a, b) => a + (b.count || 0), 0);
+          if (totalAfterTypeTry < totalOfTypeBefore) {
+            // moved
+            const movedTotal = totalOfTypeBefore - totalAfterTypeTry;
+            if (window.selectedItem) await ensureCursorCleared({ bot, chest, log });
+            return { success: true, moved: movedTotal, deposited: true };
+          }
+        } catch (_) {}
+      }
+
+      // 2) pick up from source and place
+      await bot.clickWindow(sourceWindowSlot, 0, 0);
+      await sleep(120);
+
+      const selected = window.selectedItem;
+      if (!selected) {
+        // pickup failed — abort
+        await ensureCursorCleared({ bot, chest, log });
+        return { success: false, moved: 0, error: 'pickup failed' };
+      }
+
+      // find destination in chest area (0 .. invStart-1)
+      dest = -1;
+      // prefer stackable
+      for (let i = 0; i < invStart; i++) {
+        const s = slots[i];
+        if (s && isSameStack(s, selected) && s.count < (s.stackSize || 64)) { dest = i; break; }
+      }
+      if (dest === -1) {
+        // empty slot
+        for (let i = 0; i < invStart; i++) { if (!slots[i]) { dest = i; break; } }
+      }
+      if (dest === -1) {
+        // nowhere to place
+        await ensureCursorCleared({ bot, chest, log });
+        return { success: false, moved: 0, error: 'chest is full' };
+      }
+
+      if (dest !== -1) {
+        // 3) place into chest
+        await bot.clickWindow(dest, 0, 0);
+        await sleep(260);
+      }
+
+      // 4) As a last attempt, try API deposit again for single-count items
+      try {
+        await chest?.deposit?.(item.type, item.metadata ?? null, 1);
+        await sleep(240);
+      } catch (_) {}
+
+      // 4) measure moved
+      updatedSlot = window.slots[sourceWindowSlot];
+      countAfter = updatedSlot ? updatedSlot.count : 0;
+      actualMoved = Math.max(0, countBefore - countAfter);
+    }
+
+    // Ensure cursor cleared
+    if (window.selectedItem) await ensureCursorCleared({ bot, chest, log });
+
+    // Re-measure total items of this type AFTER to verify real movement (not just slot shuffle)
+    const totalOfTypeAfter = (() => {
+      try {
+        const list = typeof bot.inventory.items === 'function' ? bot.inventory.items() : [];
+        return list.filter(i => i && i.type === item.type).reduce((a, b) => a + (b.count || 0), 0);
+      } catch (_) { return 0; }
+    })();
+    const movedTotal = Math.max(0, totalOfTypeBefore - totalOfTypeAfter);
+
+    return { success: movedTotal > 0, moved: movedTotal, deposited: movedTotal > 0 };
   } catch (err) {
     return { success: false, moved: 0, error: err.message };
   }
@@ -158,12 +374,12 @@ export async function depositItem({ bot, chest, item, log }) {
  * @param {Object} params - パラメータ
  * @returns {Object} { totalMoved, totalSkipped }
  */
-export async function depositAllItems({ bot, chest, getJaItemName, log }) {
+export async function depositAllItems({ bot, chest, getJaItemName, log, maxRounds = 50 }) {
   let totalMoved = 0;
   let totalSkipped = 0;
 
-  // 最大5回ループ
-  for (let round = 1; round <= 5; round++) {
+  // 在庫が尽きるか進捗が止まるまで最大 maxRounds 反復
+  for (let round = 1; round <= maxRounds; round++) {
     // チェストの状態を分析
     const chestInfo = analyzeChest(chest);
     log?.(`ラウンド${round}: チェスト状態 - 空き${chestInfo.emptySlots}/${chestInfo.totalSlots}スロット`);
@@ -175,14 +391,32 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
     }
 
     const excludedSlots = getExcludedSlots(bot);
-    const allItems = bot.inventory.items();
-    const items = allItems.filter(item => !excludedSlots.has(item.slot));
+
+    // 可能なインデックス表現を包括的に収集（0-8 or 36-44 がホットバーの場合がある）
+    const slots = bot.inventory?.slots || [];
+    const bySlot = new Map();
+    const pushIf = (slot, itm) => { if (itm) bySlot.set(slot, { ...itm, slot }); };
+
+    // 1) items() が返す要素を優先採用（slotが 0-35 の環境想定）
+    try {
+      const list = typeof bot.inventory.items === 'function' ? bot.inventory.items() : [];
+      for (const it of list) { if (it && typeof it.slot === 'number') pushIf(it.slot, it); }
+    } catch (_) {}
+
+    // 2) スロット配列からの補完（0-8, 9-35, 36-44）
+    const ranges = [ [0, 8], [9, 35], [36, 44] ];
+    for (const [a, b] of ranges) {
+      for (let i = a; i <= b; i++) {
+        if (!bySlot.has(i) && slots[i]) pushIf(i, slots[i]);
+      }
+    }
+
+    const gathered = Array.from(bySlot.values());
+    const items = gathered.filter(item => !excludedSlots.has(item.slot));
 
     console.error(`[DEBUG] Round ${round}:`);
-    console.error(`[DEBUG]   All inventory items: ${allItems.length}`);
-    allItems.forEach(item => {
-      console.error(`[DEBUG]     Slot ${item.slot}: ${item.name} x${item.count}`);
-    });
+    console.error(`[DEBUG]   Gathered items (union 0-8,9-35,36-44): ${gathered.length}`);
+    gathered.forEach(item => { console.error(`[DEBUG]     Slot ${item.slot}: ${item.name} x${item.count}`); });
     console.error(`[DEBUG]   Excluded slots: ${Array.from(excludedSlots).join(', ')}`);
     console.error(`[DEBUG]   Items after filtering: ${items.length}`);
 
@@ -216,6 +450,7 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
         roundMoved++;
       } else {
         log?.(`  - ${getJaItemName(item.name)} は格納できませんでした`);
+        if (result.error) console.error(`[DEPOSIT][${item.name}] error: ${result.error}`);
         roundSkipped++;
       }
     }

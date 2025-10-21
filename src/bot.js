@@ -773,8 +773,16 @@ commandHandlers.set('build', ({ args, sender }) => {
 
 const normalizeChat = (text) => {
   if (!text) return '';
-  // 全角→半角の最小限正規化（全角スペース・全角！）
-  return text.replace(/\u3000/g, ' ').replace(/！/g, '!').trim();
+  // 全角→半角の最小限正規化（スペース・主要記号・＠）
+  return text
+    .replace(/\u3000/g, ' ') // 全角スペース
+    .replace(/！/g, '!')
+    .replace(/：/g, ':')
+    .replace(/，/g, ',')
+    .replace(/；/g, ';')
+    .replace(/？/g, '?')
+    .replace(/＠/g, '@')
+    .trim();
 };
 
 const parseCommand = (sender, message) => {
@@ -795,7 +803,7 @@ const parseCommand = (sender, message) => {
     }
   } else {
     // @<botname> cmd / <botname>: cmd / @<botname>: cmd
-    const norm = (s) => s.replace(/[,:;]+$/, '');
+    const norm = (s) => s.replace(/[,:;：，；]+$/, '');
     const f0 = norm(first);
     const mentions = new Set([
       `@${bot.username.toLowerCase()}`,

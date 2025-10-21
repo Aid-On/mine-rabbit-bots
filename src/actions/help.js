@@ -3,6 +3,7 @@ export function register(bot, commandHandlers) {
     const lines = [
       'commands: ping, come, follow, stop, jump',
       'look <dir|player|x y z> / face',
+      'fish [start|once|stop] / 釣り [start|once|stop]',
       'build <block> [front|back|left|right|up|down|near]',
       'dig <block> [count] / mine <block> [count]',
       'craft <item> [count]',
@@ -16,4 +17,3 @@ export function register(bot, commandHandlers) {
     for (const l of lines) bot.chat(sender ? `@${sender} ${l}` : l);
   });
 }
-

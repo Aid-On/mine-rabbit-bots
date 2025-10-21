@@ -130,4 +130,3 @@ export function register(bot, commandHandlers, ctx) {
     })();
   });
 }
-
