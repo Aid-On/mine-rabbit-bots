@@ -13,10 +13,12 @@ import * as craft from './craft.js';
 import * as furnace from './furnace.js';
 import * as perf from './perf.js';
 import * as fish from './fish.js';
+import * as eat from './eat.js';
+import * as skin from './skin.js';
 
 export function registerActions(bot, commandHandlers, ctx) {
   const modules = [
-    look, status, ping, follow, jump, items, help, ja, build, dig, chest, craft, furnace, perf, fish
+    look, status, ping, follow, jump, items, help, ja, build, dig, chest, craft, furnace, perf, fish, eat, skin
   ];
   for (const m of modules) {
     try {

@@ -110,16 +110,13 @@ bot.once('spawn', () => {
   // 日本語辞書の読み込み（存在すれば）
   loadJaDict();
 
-  // 自動食事ループ開始（満腹度<=10 または 体力<最大 のとき満腹まで食べる）
-  try { startAutoEat(); } catch (_) {}
+  // 食事ロジックは actions/eat.js に移動（spawn 後に自動開始）
 });
 
 const state = {
   followTarget: null,
   followTask: null,
-  eating: false,
-  _eatTimer: null,
-  lastNoFoodAt: 0
+  // 食事関連の状態は actions/eat.js 側で管理
 };
 
 const clearFollowTask = () => {
@@ -155,73 +152,7 @@ const stopFollowing = () => {
   }
 };
 
-// 自動食事: 触る食料の優先順位（高→低）
-const foodPriority = [
-  'cooked_beef','cooked_porkchop','cooked_mutton','cooked_chicken','baked_potato',
-  'cooked_cod','cooked_salmon','bread','golden_carrot','carrot','apple','cookie',
-  'beetroot','beetroot_soup','pumpkin_pie','melon_slice','dried_kelp','sweet_berries',
-  'mushroom_stew','rabbit_stew','suspicious_stew'
-];
-
-const findFoodItem = () => {
-  const inv = bot.inventory?.items?.() || [];
-  const order = new Map(foodPriority.map((n, i) => [n, i]));
-  const foods = inv.filter(it => order.has(it.name));
-  foods.sort((a, b) => (order.get(a.name) - order.get(b.name)) || (b.count - a.count));
-  return foods[0] || null;
-};
-
-const eatOnce = async () => {
-  const food = findFoodItem();
-  if (!food) return false;
-  try { await bot.equip(food, 'hand'); } catch (e) { return false; }
-  try {
-    if (typeof bot.consume === 'function') {
-      await bot.consume();
-    } else {
-      bot.activateItem?.();
-      await sleep(1700);
-      bot.deactivateItem?.();
-    }
-    return true;
-  } catch (_) { return false; }
-};
-
-const shouldEat = () => {
-  const food = Number(bot.food ?? 0);
-  const hp = Number(bot.health ?? 0);
-  // 満腹度が半分以下、または体力が満タン未満の時に開始
-  return (food <= 10) || (hp < 20);
-};
-
-const startAutoEat = () => {
-  if (state._eatTimer) clearInterval(state._eatTimer);
-  state._eatTimer = setInterval(async () => {
-    if (state.eating) return;
-    if (!shouldEat()) return;
-    // 食料が無ければ通知して終了（連続通知は抑制）
-    if (!findFoodItem()) {
-      const now = Date.now();
-      if (now - state.lastNoFoodAt > 15000) {
-        try { bot.chat('食料を持っていません'); } catch (_) {}
-        state.lastNoFoodAt = now;
-      }
-      return;
-    }
-    state.eating = true;
-    try {
-      let loops = 0;
-      while ((Number(bot.food ?? 0) < 20) && loops++ < 8) {
-        const ok = await eatOnce();
-        if (!ok) break;
-        await sleep(220);
-      }
-    } catch (_) {
-    } finally {
-      state.eating = false;
-    }
-  }, 1200);
-};
+// 食事関連のロジックは actions/eat.js に移動
 
 const commandHandlers = new Map();
 // 日本語アイテム名（よく使う代表的なもの）
@@ -857,15 +788,26 @@ const parseCommand = (sender, message) => {
 
   const parts = trimmed.split(/\s+/);
   let first = parts[0].toLowerCase();
-  let commandParts = parts;
+  let commandParts = null; // null until we positively detect a command
 
-  // !cmd / !<botname> cmd
+  // Allow "/help" to show bot help
+  if (first === '/help') {
+    commandParts = ['help', ...parts.slice(1)];
+  }
+
+  // !cmd もしくは !<botname> cmd
   if (first.startsWith('!')) {
-    const token = first.substring(1);
+    const token = first.substring(1).toLowerCase();
+    if (!token) return null;
     if (token === bot.username.toLowerCase()) {
+      // 明示的な宛先指定: !<botname> <cmd>
       commandParts = parts.slice(1);
-    } else {
+    } else if (commandHandlers && commandHandlers.has(token)) {
+      // グローバル: !<cmd>
       commandParts = [token, ...parts.slice(1)];
+    } else {
+      // 他のボット宛て、または未知トークン: 無視
+      return null;
     }
   } else {
     // @<botname> cmd / <botname>: cmd / @<botname>: cmd
@@ -879,6 +821,9 @@ const parseCommand = (sender, message) => {
       commandParts = parts.slice(1);
     }
   }
+
+  // If it wasn't explicitly a command, ignore the chat
+  if (!commandParts || commandParts.length === 0) return null;
 
   const command = commandParts[0]?.toLowerCase();
   const args = commandParts.slice(1);
@@ -899,7 +844,8 @@ bot.on('chat', (sender, message) => {
   } else {
     log(`未対応コマンド: ${parsed.command}`);
     try {
-      bot.chat(`@${sender} 未対応コマンド: ${parsed.command} / help で一覧`);
+      // ループ回避のためメンションしない
+      bot.chat(`未対応コマンド: ${parsed.command} / /help で一覧`);
     } catch (_) {}
   }
 });

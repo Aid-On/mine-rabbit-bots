@@ -1,14 +1,26 @@
 import { readFile } from 'fs/promises';
 
 export function register(bot, commandHandlers, ctx) {
+  const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
+
   commandHandlers.set('ja', ({ args, sender }) => {
+    if (!args?.length || hasHelp(args)) {
+      bot.chat('英名→日本語名を表示します。');
+      bot.chat('使用: ja <英名>');
+      bot.chat('例: ja oak_log → オークの原木');
+      return;
+    }
     const en = (args[0] || '').replace(/^minecraft:/, '').toLowerCase();
-    if (!en) { bot.chat(sender ? `@${sender} 使用方法: ja <英名>` : 'usage: ja <enName>'); return; }
     bot.chat(sender ? `@${sender} ${en} → ${ctx.getJaItemName(en)}` : `${en} → ${ctx.getJaItemName(en)}`);
   });
 
   commandHandlers.set('jaadd', ({ args, sender }) => {
-    if (!args || args.length < 2) { bot.chat(sender ? `@${sender} 使用方法: jaadd <英名> <日本語名>` : 'usage: jaadd <en> <ja>'); return; }
+    if (!args || args.length < 2 || hasHelp(args)) {
+      bot.chat('日本語辞書に個別登録します。');
+      bot.chat('使用: jaadd <英名> <日本語名>');
+      bot.chat('例: jaadd iron_ingot 鉄インゴット');
+      return;
+    }
     const en = String(args[0]).replace(/^minecraft:/, '').toLowerCase();
     const ja = args.slice(1).join(' ');
     const dict = ctx.getJaDict();
@@ -19,8 +31,12 @@ export function register(bot, commandHandlers, ctx) {
   });
 
   commandHandlers.set('jadel', ({ args, sender }) => {
+    if (!args?.length || hasHelp(args)) {
+      bot.chat('日本語辞書から削除します。');
+      bot.chat('使用: jadel <英名>');
+      bot.chat('例: jadel iron_ingot');
+      return; }
     const en = (args[0] || '').replace(/^minecraft:/, '').toLowerCase();
-    if (!en) { bot.chat(sender ? `@${sender} 使用方法: jadel <英名>` : 'usage: jadel <en>'); return; }
     const dict = ctx.getJaDict();
     if (dict[en]) {
       delete dict[en];
@@ -32,14 +48,18 @@ export function register(bot, commandHandlers, ctx) {
     }
   });
 
-  commandHandlers.set('jaload', async ({ sender }) => {
+  commandHandlers.set('jaload', async ({ args = [], sender }) => {
+    if (hasHelp(args)) { bot.chat('日本語辞書を再読み込みします。'); bot.chat('使用: jaload'); return; }
     try { await ctx.loadJaDict(); bot.chat(sender ? `@${sender} 日本語辞書を再読み込みしました（${Object.keys(ctx.getJaDict()).length}件）` : 'OK'); }
     catch (e) { bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`); }
   });
 
   commandHandlers.set('jaimport', async ({ args, sender }) => {
+    if (!args?.length || hasHelp(args)) {
+      bot.chat('日本語辞書をファイルから取り込みます。');
+      bot.chat('使用: jaimport data/ja-items.csv|json');
+      return; }
     const rel = args[0];
-    if (!rel) { bot.chat(sender ? `@${sender} 使用: jaimport data/ja-items.csv|json` : 'usage: jaimport data/ja-items.csv|json'); return; }
     try {
       const lower = rel.toLowerCase();
       let added = 0;
@@ -67,4 +87,3 @@ export function register(bot, commandHandlers, ctx) {
     } catch (e) { bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`); }
   });
 }
-

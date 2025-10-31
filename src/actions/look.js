@@ -2,6 +2,7 @@ export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('look', ({ args, sender }) => {
     const say = (m) => { if (sender) bot.chat(`@${sender} ${m}`); else bot.chat(m); };
     const eye = bot.entity.position.offset(0, 1.6, 0);
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ','/?','?'].includes(String(a||'').toLowerCase()));
 
     const lookDir = async (kind) => {
       const { front, back, left, right } = ctx.yawToDir();
@@ -22,8 +23,14 @@ export function register(bot, commandHandlers, ctx) {
 
     (async () => {
       try {
+        if (hasHelp(args)) {
+          bot.chat('視線移動: 方向・座標・プレイヤーへ向きます。');
+          bot.chat('使用: look <front back left right up down player|x y z>');
+          bot.chat('例: look front / look Alice / look 100 64 100');
+          return;
+        }
         const a0 = (args[0] || '').toLowerCase();
-        if (!a0) { say('使用: look <front|back|left|right|up|down|player|x y z>'); return; }
+        if (!a0) { bot.chat('使用: look <front back left right up down player|x y z>'); return; }
         if (await lookDir(a0)) return;
 
         if (args.length >= 3 && !isNaN(Number(args[0])) && !isNaN(Number(args[1])) && !isNaN(Number(args[2]))) {
@@ -48,4 +55,3 @@ export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('face', (ctx2) => commandHandlers.get('look')(ctx2));
   commandHandlers.set('向く', (ctx2) => commandHandlers.get('look')(ctx2));
 }
-

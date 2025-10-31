@@ -1,4 +1,5 @@
 export function register(bot, commandHandlers, ctx) {
+  const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
   const summarizeInventory = () => {
     const stacks = bot.inventory.items().slice();
     try {
@@ -29,7 +30,12 @@ export function register(bot, commandHandlers, ctx) {
     return chunks;
   };
 
-  const listHandler = ({ sender }) => {
+  const listHandler = ({ args = [], sender }) => {
+    if (hasHelp(args)) { 
+      bot.chat('所持品一覧を表示します。');
+      bot.chat('使用: items|inv|inventory|list');
+      return; 
+    }
     const list = summarizeInventory();
     if (list.length === 0) { bot.chat(sender ? `@${sender} inventory: empty` : 'inventory: empty'); return; }
     const lines = chatChunks(list);
@@ -41,4 +47,3 @@ export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('inventory', (ctx2) => listHandler(ctx2));
   commandHandlers.set('list', (ctx2) => listHandler(ctx2));
 }
-

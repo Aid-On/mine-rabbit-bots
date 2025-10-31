@@ -1,19 +1,35 @@
 export function register(bot, commandHandlers) {
-  commandHandlers.set('help', ({ sender }) => {
-    const lines = [
-      'commands: ping, come, follow, stop, jump',
-      'look <dir|player|x y z> / face',
-      'build <block> [front|back|left|right|up|down|near]',
-      'dig <block> [count] / mine <block> [count]',
-      'craft <item> [count]',
-      'items|inv|inventory|list',
-      'status|hp|food|ステータス|状態: 体力・満腹度を表示',
-      'furnace <input|fuel|take|load> ...',
-      'chest all / chest take <item> [count]',
-      'ja <enName> / jaadd <英名> <日本語> / jadel <英名>',
-      'jaload / jaimport data/ja-items.(json|csv)'
-    ];
-    for (const l of lines) bot.chat(sender ? `@${sender} ${l}` : l);
-  });
-}
+  const say = (msg, sender) => { try { bot.chat(sender ? `@${sender} ${msg}` : msg); } catch (_) {} };
+  const sayNM = (msg) => { try { bot.chat(msg); } catch (_) {} };
 
+  const showOverview = (_sender) => {
+    sayNM('— ヘルプ —');
+    sayNM('基本: ping, status, eat, fish, follow|come|stop, look, jump');
+    sayNM('行動: dig, build, items');
+    sayNM('生産: craft, craftauto, furnace, smeltauto, chest');
+    sayNM('ユーティリティ: skin, perf, ja, jaload, jaadd, jadel, jaimport');
+    sayNM('各コマンドの詳細: <cmd> -h で表示（例: fish -h）');
+  };
+
+  const showHelp = ({ args = [], sender }) => {
+    // help <cmd> で個別ヘルプ（各コマンドの -h を呼ぶ）
+    const q = String(args[0] || '').toLowerCase();
+    if (q) {
+      const handler = commandHandlers.get(q);
+      if (typeof handler === 'function') {
+        try { handler({ args: ['-h'], sender }); } catch (_) { showOverview(sender); }
+        return;
+      }
+      sayNM(`不明なコマンド: ${q}`);
+      showOverview(sender);
+      return;
+    }
+    showOverview(sender);
+  };
+
+  commandHandlers.set('help', showHelp);
+  // 日本語エイリアス
+  commandHandlers.set('ヘルプ', (ctx) => showHelp(ctx));
+  commandHandlers.set('助けて', (ctx) => showHelp(ctx));
+  commandHandlers.set('コマンド', (ctx) => showHelp(ctx));
+}

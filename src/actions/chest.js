@@ -7,6 +7,25 @@ export function register(bot, commandHandlers, ctx) {
     const say = (m) => { if (sender) bot.chat(`@${sender} ${m}`); else bot.chat(m); };
     const sub = (args?.[0] || '').toLowerCase();
     const rest = (args || []).slice(1);
+    const hasHelpFlag = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ','/?','?'].includes(String(a||'').toLowerCase()));
+
+    const helpGeneral = () => {
+      say('使用: chest <all|take> ...');
+      say('  chest all            近くのチェストに所持品を一括格納（入らない物はスキップ）');
+      say('  chest take <item> [count|all]   近くのチェストから指定アイテムを取得');
+      say('例: chest all / chest take cobblestone 32 / chest take iron_ingot all');
+    };
+    const helpAll = () => {
+      say('使用: chest all');
+      say('説明: 近くのチェストを開き、所持品を可能な限りすべて格納します。');
+      say('別名: chest dump');
+    };
+    const helpTake = () => {
+      say('使用: chest take <itemName> [count|all]');
+      say('説明: 近くのチェストから指定アイテムを指定数だけ取得します。');
+      say('例: chest take cobblestone 16 / chest take iron_ingot all');
+      say('別名: chest withdraw');
+    };
 
     const normalizeTok = (s) => String(s || '').toLowerCase().replace(/[,:;。．、！!？?]+$/g, '').trim();
     const parseNameCount = (arr) => {
@@ -20,7 +39,12 @@ export function register(bot, commandHandlers, ctx) {
 
     (async () => {
       try {
-        if (!sub) { say('使用: chest <all|take> ...'); return; }
+        // chest -h / chest --help
+        if (!sub && hasHelpFlag(args)) { helpGeneral(); return; }
+        if (!sub) { helpGeneral(); return; }
+
+        // chest all -h
+        if ((sub === 'all' || sub === 'dump') && hasHelpFlag(rest)) { helpAll(); return; }
 
         if (sub === 'all' || sub === 'dump') {
           const release = await acquireLock('chest');
@@ -55,6 +79,12 @@ export function register(bot, commandHandlers, ctx) {
           return;
         }
         if (sub === 'take' || sub === 'withdraw') {
+          if (hasHelpFlag(rest) || !rest.length) {
+            if (hasHelpFlag(rest)) { helpTake(); return; }
+            // 引数なしは使い方表示
+            helpTake();
+            return;
+          }
           const chest = await openNearestChest(bot, ctx.mcData(), ctx.gotoBlock);
           const token = normalizeTok(rest[0]);
           if (token === 'all' || token === '*' || token === '＊' || token === '全部' || token === 'すべて' || token === '全て') {
@@ -123,11 +153,10 @@ export function register(bot, commandHandlers, ctx) {
           return;
         }
 
-        say('使用: chest <all|take> ...');
+        helpGeneral();
       } catch (e) {
         say(`失敗: ${e?.message || e}`);
       }
     })();
   });
 }
-

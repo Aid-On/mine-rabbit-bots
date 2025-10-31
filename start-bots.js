@@ -2,7 +2,7 @@
 import { spawn } from 'child_process';
 import './src/env.js';
 
-const bots = ['wim'];
+const bots = ['wim',"pino"];
 
 // Allow MINEFLYER_HOST to optionally include ":port"
 const rawHost = process.env.MINEFLYER_HOST || '127.0.0.1';

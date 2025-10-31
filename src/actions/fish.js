@@ -6,6 +6,7 @@ export function register(bot, commandHandlers, ctx) {
   let casting = false; // 二重cast防止
 
   const say = (msg, sender) => { try { if (sender) bot.chat(`@${sender} ${msg}`); } catch (_) {} };
+  const sayNM = (msg) => { try { bot.chat(msg); } catch (_) {} };
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const ensureRodEquipped = async () => {
@@ -122,6 +123,15 @@ export function register(bot, commandHandlers, ctx) {
   };
 
   const fishHandler = async ({ args, sender }) => {
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ','/?','?'].includes(String(a||'').toLowerCase()));
+    if (hasHelp(args)) {
+      sayNM('釣り: 自動または1回だけ釣ります。');
+      sayNM('使用: fish [start once stop]');
+      sayNM('例: fish            （自動開始）');
+      sayNM('    fish once       （1回だけ釣る）');
+      sayNM('    fish stop       （停止）');
+      return;
+    }
     const sub = (args[0] || 'start').toLowerCase();
     if (sub === 'start' || sub === 'on') return startLoop(sender);
     if (sub === 'once') {
@@ -136,7 +146,7 @@ export function register(bot, commandHandlers, ctx) {
       return;
     }
     if (sub === 'stop' || sub === 'off') return stopLoop(sender);
-    say('使用: fish [start|once|stop]', sender);
+    sayNM('使用: fish [start once stop]');
   };
   commandHandlers.set('fish', fishHandler);
 

@@ -1,8 +1,11 @@
 export function register(bot, commandHandlers, ctx) {
   // dig <blockName> [count]
   commandHandlers.set('dig', ({ args, sender }) => {
-    if (!args || args.length === 0) {
-      bot.chat(sender ? `@${sender} 使用方法: dig <blockName> [count]` : 'usage: dig <blockName> [count]');
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
+    if (!args || args.length === 0 || hasHelp(args)) {
+      bot.chat('採掘: 指定ブロックを探して掘ります。');
+      bot.chat('使用: dig <blockName> [count]');
+      bot.chat('例: dig coal_ore 3 / dig oak_log 10');
       return;
     }
 
@@ -73,4 +76,3 @@ export function register(bot, commandHandlers, ctx) {
 
   commandHandlers.set('mine', (ctx2) => commandHandlers.get('dig')(ctx2));
 }
-

@@ -1,16 +1,19 @@
 export function register(bot, commandHandlers, ctx) {
   // craft <itemName> [count]
   commandHandlers.set('craft', ({ args, sender }) => {
+    const help = () => {
+      bot.chat('クラフト: 指定アイテムを作成します。');
+      bot.chat('使用: craft <itemName> [count]');
+      bot.chat('例: craft torch 16 / craft oak_planks 32');
+    };
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
     const mc = ctx.mcData();
     if (!mc) {
       if (sender) bot.chat(`@${sender} データ未初期化です。少し待ってください`);
       return;
     }
 
-    if (!args || args.length === 0) {
-      if (sender) bot.chat(`@${sender} 使用方法: craft <itemName> [count]`);
-      return;
-    }
+    if (!args || args.length === 0 || hasHelp(args)) { help(); return; }
 
     // 引数解析: 数値が先でも後でも対応
     const a0 = String(args[0]).toLowerCase();
@@ -82,16 +85,19 @@ export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('craft+', ({ args, sender }) => commandHandlers.get('craftauto')({ args, sender }));
 
   commandHandlers.set('craftauto', ({ args, sender }) => {
+    const help = () => {
+      bot.chat('自動採集つきクラフト: 足りない素材を集めて作成します。');
+      bot.chat('使用: craftauto <itemName> [count]');
+      bot.chat('例: craftauto torch 32');
+    };
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
     const mc = ctx.mcData();
     if (!mc) {
       if (sender) bot.chat(`@${sender} データ未初期化です。少し待ってください`);
       return;
     }
 
-    if (!args || args.length === 0) {
-      if (sender) bot.chat(`@${sender} 使用方法: craftauto <itemName> [count]`);
-      return;
-    }
+    if (!args || args.length === 0 || hasHelp(args)) { help(); return; }
 
     // 引数解析: 数値が先でも後でも対応
     const a0 = String(args[0]).toLowerCase();
@@ -127,4 +133,3 @@ export function register(bot, commandHandlers, ctx) {
     })();
   });
 }
-

@@ -3,9 +3,12 @@ export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('build', ({ args, sender }) => {
     const blockName = args[0];
     const dirArg = (args[1] || 'front').toLowerCase();
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
 
-    if (!blockName) {
-      bot.chat(sender ? `@${sender} 使用方法: build <blockName> [front|back|left|right|up|down|near]` : 'usage: build <blockName> [dir]');
+    if (!blockName || hasHelp(args)) {
+      bot.chat('設置: 所持ブロックを指定位置へ設置します。');
+      bot.chat('使用: build <blockName> [front back left right up down near]');
+      bot.chat('例: build cobblestone front / build oak_planks near');
       return;
     }
 
@@ -102,4 +105,3 @@ export function register(bot, commandHandlers, ctx) {
     })();
   });
 }
-

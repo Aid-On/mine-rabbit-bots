@@ -1,7 +1,8 @@
 export function register(bot, commandHandlers, ctx) {
   // smeltauto / smelt <outputName> [count]
   commandHandlers.set('smeltauto', ({ args, sender }) => {
-    if (!args || args.length === 0) { if (sender) bot.chat(`@${sender} 使用方法: smeltauto <itemName> [count]`); return; }
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
+    if (!args || args.length === 0 || hasHelp(args)) { bot.chat('自動製錬: 必要なら燃料も確保して精錬します。'); bot.chat('使用: smeltauto <itemName> [count]'); bot.chat('例: smeltauto glass 8'); return; }
     const a0 = String(args[0]).toLowerCase(); const a1 = args[1] !== undefined ? String(args[1]).toLowerCase() : undefined;
     const a0num = Number(a0); const a1num = a1 !== undefined ? Number(a1) : NaN;
     let itemName = isNaN(a0num) ? a0 : (a1 ?? ''); let count = !isNaN(a0num) ? a0num : (!isNaN(a1num) ? a1num : 1);
@@ -12,7 +13,13 @@ export function register(bot, commandHandlers, ctx) {
 
   // furnace <input|fuel|take|load>
   commandHandlers.set('furnace', ({ args, sender }) => {
-    if (!args || args.length === 0) { bot.chat(sender ? `@${sender} 使用: furnace <input|fuel|take|load> ...` : 'usage: furnace <input|fuel|take|load> ...'); return; }
+    const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ','/?','?'].includes(String(a||'').toLowerCase()));
+    if (!args || args.length === 0 || hasHelp(args)) {
+      bot.chat('かまど操作:');
+      bot.chat('使用: furnace <input|fuel|take|load> ...');
+      bot.chat('例: furnace input raw_iron 8 / furnace take output');
+      bot.chat('詳細: input|fuel|put で投入、take <input|fuel|output>、load で入力+燃料まとめて');
+      return; }
     const sub = args[0].toLowerCase(); const rest = args.slice(1);
     const parseNameCount = (arr) => { const a0 = arr[0]; const a1 = arr[1]; const isNum0 = a0 !== undefined && !isNaN(Number(a0)); const isNum1 = a1 !== undefined && !isNaN(Number(a1)); const name = (isNum0 ? a1 : a0) || ''; const count = Math.max(1, Math.min(64, Number(isNum0 ? a0 : (isNum1 ? a1 : 1)))); return { name, count, consumed: (a0!==undefined?1:0)+(a1!==undefined?1:0) }; };
     (async () => {
@@ -37,4 +44,3 @@ export function register(bot, commandHandlers, ctx) {
     })();
   });
 }
-
