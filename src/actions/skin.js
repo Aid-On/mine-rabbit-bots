@@ -3,7 +3,7 @@
 // 仕組み: ボットがサーバーコマンドを実行して、送信者(入場者)のスキンを設定します。
 
 export function register(bot, commandHandlers, ctx) {
-  const say = (msg, sender) => { try { if (sender) bot.chat(`@${sender} ${msg}`); else bot.chat(msg); } catch (_) {} };
+  const say = (msg, _sender) => { try { bot.chat(msg); } catch (_) {} };
   const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ','/?','?'].includes(String(a||'').toLowerCase()));
 
   const sanitizePlayer = (s) => (s || '').replace(/[^A-Za-z0-9_\-]/g, '').slice(0, 32);

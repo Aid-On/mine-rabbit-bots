@@ -37,9 +37,9 @@ export function register(bot, commandHandlers, ctx) {
       return; 
     }
     const list = summarizeInventory();
-    if (list.length === 0) { bot.chat(sender ? `@${sender} inventory: empty` : 'inventory: empty'); return; }
+    if (list.length === 0) { bot.chat('inventory: empty'); return; }
     const lines = chatChunks(list);
-    for (const line of lines) bot.chat(sender ? `@${sender} ${line}` : line);
+    for (const line of lines) bot.chat(line);
   };
 
   commandHandlers.set('items', listHandler);

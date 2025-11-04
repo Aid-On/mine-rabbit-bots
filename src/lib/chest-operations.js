@@ -52,10 +52,10 @@ export function analyzeChest(chest) {
 export function getExcludedSlots(bot) {
   const excluded = new Set();
 
-  // 手に持っているアイテムも格納対象に含める（除外しない）
-  // if (bot.heldItem?.slot != null) {
-  //   excluded.add(bot.heldItem.slot);
-  // }
+  // 手に持っているアイテムは除外（他アクションと競合しやすい／装備中のため）
+  try {
+    if (bot.heldItem?.slot != null) excluded.add(bot.heldItem.slot);
+  } catch (_) {}
 
   // 装備品は除外（頭・胴・脚・足）
   const equipSlots = ['head', 'torso', 'legs', 'feet'];
@@ -94,63 +94,64 @@ export function sortItemsByPriority(items, stackableSpace) {
  * @returns {Object} { success, moved, error }
  */
 export async function depositItem({ bot, chest, item, log }) {
-  const countBefore = item.count;
-  const slotId = item.slot;
+  // 同じタイプの所持数を合算して前後差で移動個数を推定
+  const sumCountByType = (type) => (bot.inventory.items() || [])
+    .filter((it) => it && it.type === type)
+    .reduce((a, b) => a + (b.count || 0), 0);
 
-  console.error(`[DEPOSIT] Starting for slot ${slotId}: ${item.name} x${countBefore}`);
-
-  // currentWindowを検証
-  if (!bot.currentWindow) {
-    console.error(`[DEPOSIT] No window open`);
-    return { success: false, moved: 0, error: 'No window open' };
-  }
-
-  // bot.inventory経由でアイテムを取得
-  const sourceItem = bot.inventory.slots[slotId];
-  if (!sourceItem) {
-    console.error(`[DEPOSIT] sourceItem not found at slot ${slotId}`);
-    return { success: false, moved: 0, error: `スロット${slotId}が空` };
-  }
-
-  const window = bot.currentWindow;
-
+  const before = sumCountByType(item.type);
+  let moved = 0;
   try {
-    // ウィンドウスロット番号に変換
-    let sourceWindowSlot;
-    if (slotId >= 0 && slotId < 9) {
-      // ホットバー下段（インベントリ番号0-8）
-      sourceWindowSlot = 54 + slotId;
-    } else if (slotId >= 9 && slotId <= 35) {
-      // メインインベントリ（インベントリ番号9-35）
-      sourceWindowSlot = 27 + (slotId - 9);
-    } else if (slotId >= 36 && slotId <= 44) {
-      // ホットバー上段（インベントリ番号36-44は実際には0-8と同じ）
-      sourceWindowSlot = 54 + (slotId - 36);
-    } else {
-      return { success: false, moved: 0, error: `無効なスロット: ${slotId}` };
+    const desired = Math.max(1, item.count || 1);
+    let remaining = desired;
+    let lastProgress = -1;
+    // 小分けにして投入（スタック不可や部分投入に対応）
+    for (let tries = 0; tries < 6 && remaining > 0; tries++) {
+      const chunk = Math.min(remaining, 32);
+      try {
+        await chest.deposit(item.type, item.metadata ?? null, chunk);
+      } catch (_) {
+        break; // deposit不可 → ループ離脱
+      }
+      await sleep(80);
+      const now = sumCountByType(item.type);
+      const diff = Math.max(0, before - now) - moved;
+      if (diff <= 0) {
+        if (lastProgress === 0) break; // 連続で進捗なし → 打ち切り
+        lastProgress = 0;
+      } else {
+        moved += diff;
+        remaining = Math.max(0, desired - moved);
+        lastProgress = diff;
+      }
     }
-
-    // Shift+クリックを使ってアイテムを転送
-    // mode=1 はshift-click（アイテムを自動的に反対側のコンテナに移動）
-    console.error(`[DEPOSIT] Shift-clicking window slot ${sourceWindowSlot}`);
-    await bot.clickWindow(sourceWindowSlot, 0, 1);
-    await sleep(500); // インベントリ状態の更新を待つ
-
-    // 格納後の確認：window.slotsを使う方が更新が早い
-    const updatedSlot = window.slots[sourceWindowSlot];
-    const countAfter = updatedSlot ? updatedSlot.count : 0;
-    const actualMoved = countBefore - countAfter;
-
-    console.error(`[DEPOSIT] Result: ${countBefore} → ${countAfter} (moved: ${actualMoved})`);
-
-    return {
-      success: actualMoved > 0,
-      moved: actualMoved,
-      deposited: actualMoved > 0
-    };
   } catch (err) {
-    return { success: false, moved: 0, error: err.message };
+    // deposit が例外で落ちた場合は下のフォールバックへ
   }
+  if (moved === 0) {
+    // フォールバック: シフトクリックで移動を試みる
+    try {
+      const win = bot.currentWindow;
+      if (!win) throw new Error('no window');
+      const src = (bot.inventory.items() || []).find((it) => it && it.type === item.type);
+      if (!src || typeof src.slot !== 'number') throw new Error('no src');
+      const invStart = win.inventoryStart ?? (win.slots.length - 36);
+      const invEnd = win.inventoryEnd ?? win.slots.length;
+      const hotbarStart = invEnd - 9;
+      let windowSlot = null;
+      if (src.slot >= 9 && src.slot <= 35) windowSlot = invStart + (src.slot - 9);
+      else if (src.slot >= 36 && src.slot <= 44) windowSlot = hotbarStart + (src.slot - 36);
+      if (windowSlot != null) {
+        await bot.clickWindow(windowSlot, 0, 1);
+        await sleep(160);
+        const now = sumCountByType(item.type);
+        moved = Math.max(0, before - now);
+      }
+    } catch (_) {
+      // noop: movedは0のまま
+    }
+  }
+  return { success: moved > 0, moved, deposited: moved > 0 };
 }
 
 /**
@@ -161,11 +162,12 @@ export async function depositItem({ bot, chest, item, log }) {
 export async function depositAllItems({ bot, chest, getJaItemName, log }) {
   let totalMoved = 0;
   let totalSkipped = 0;
+  const failCounts = new Map(); // type -> failures
 
   // 最大5回ループ
   for (let round = 1; round <= 5; round++) {
     // チェストの状態を分析
-    const chestInfo = analyzeChest(chest);
+    let chestInfo = analyzeChest(chest);
     log?.(`ラウンド${round}: チェスト状態 - 空き${chestInfo.emptySlots}/${chestInfo.totalSlots}スロット`);
 
     // 空きスロットが0なら終了
@@ -199,6 +201,9 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
     const sortedItems = sortItemsByPriority(items, chestInfo.stackableSpace);
 
     for (const item of sortedItems) {
+      // 同タイプが繰り返し失敗しているならスキップ
+      const f = failCounts.get(item.type) || 0;
+      if (f >= 2) { continue; }
       // スタック可能スペースまたは空きスロットがあるかチェック
       const stackableSpace = chestInfo.stackableSpace.get(item.type) || 0;
       const canDeposit = stackableSpace > 0 || chestInfo.emptySlots > 0;
@@ -214,9 +219,13 @@ export async function depositAllItems({ bot, chest, getJaItemName, log }) {
       if (result.success) {
         log?.(`  ✓ ${getJaItemName(item.name)} を格納`);
         roundMoved++;
+        // 成功したら状態を更新
+        chestInfo = analyzeChest(chest);
+        failCounts.delete(item.type);
       } else {
         log?.(`  - ${getJaItemName(item.name)} は格納できませんでした`);
         roundSkipped++;
+        failCounts.set(item.type, f + 1);
       }
     }
 

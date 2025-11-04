@@ -5,7 +5,7 @@ export function register(bot, commandHandlers, ctx) {
   let runner = null;
   let casting = false; // 二重cast防止
 
-  const say = (msg, sender) => { try { if (sender) bot.chat(`@${sender} ${msg}`); } catch (_) {} };
+  const say = (msg, _sender) => { try { bot.chat(msg); } catch (_) {} };
   const sayNM = (msg) => { try { bot.chat(msg); } catch (_) {} };
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -8,10 +8,7 @@ export function register(bot, commandHandlers, ctx) {
     };
     const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
     const mc = ctx.mcData();
-    if (!mc) {
-      if (sender) bot.chat(`@${sender} データ未初期化です。少し待ってください`);
-      return;
-    }
+    if (!mc) { bot.chat('データ未初期化です。少し待ってください'); return; }
 
     if (!args || args.length === 0 || hasHelp(args)) { help(); return; }
 
@@ -28,10 +25,7 @@ export function register(bot, commandHandlers, ctx) {
     desired = Math.max(1, Math.min(64, Number(desired)));
 
     const itemDef = mc.itemsByName[itemName];
-    if (!itemDef) {
-      if (sender) bot.chat(`@${sender} 不明なアイテム: ${itemName}`);
-      return;
-    }
+    if (!itemDef) { bot.chat(`不明なアイテム: ${itemName}`); return; }
 
     (async () => {
       try {
@@ -48,15 +42,12 @@ export function register(bot, commandHandlers, ctx) {
           recipe = bot.recipesFor(itemDef.id, null, desired, null)[0];
         }
 
-        if (!recipe) {
-          if (sender) bot.chat(`@${sender} クラフト不可（材料不足か作業台が遠い）`);
-          return;
-        }
+        if (!recipe) { bot.chat('クラフト不可（材料不足か作業台が遠い）'); return; }
 
         const per = recipe.result?.count || 1;
         const times = Math.max(1, Math.ceil(desired / per));
 
-        if (sender) bot.chat(`@${sender} ${ctx.getJaItemName(itemName)} を ${desired} 個クラフトします`);
+        bot.chat(`${ctx.getJaItemName(itemName)} を ${desired} 個クラフトします`);
 
         let made = 0;
         for (let i = 0; i < times; i++) {
@@ -71,12 +62,12 @@ export function register(bot, commandHandlers, ctx) {
 
         if (made > 0) {
           const finalCount = Math.min(made, desired);
-          if (sender) bot.chat(`@${sender} クラフト完了: ${ctx.getJaItemName(itemName)} x${finalCount}`);
+          bot.chat(`クラフト完了: ${ctx.getJaItemName(itemName)} x${finalCount}`);
         } else {
-          if (sender) bot.chat(`@${sender} クラフトできませんでした`);
+          bot.chat('クラフトできませんでした');
         }
       } catch (e) {
-        if (sender) bot.chat(`@${sender} エラー: ${e.message}`);
+        bot.chat(`エラー: ${e.message}`);
       }
     })();
   });
@@ -92,10 +83,7 @@ export function register(bot, commandHandlers, ctx) {
     };
     const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
     const mc = ctx.mcData();
-    if (!mc) {
-      if (sender) bot.chat(`@${sender} データ未初期化です。少し待ってください`);
-      return;
-    }
+    if (!mc) { bot.chat('データ未初期化です。少し待ってください'); return; }
 
     if (!args || args.length === 0 || hasHelp(args)) { help(); return; }
 
@@ -112,23 +100,20 @@ export function register(bot, commandHandlers, ctx) {
     desired = Math.max(1, Math.min(64, Number(desired)));
 
     const itemDef = mc.itemsByName[itemName];
-    if (!itemDef) {
-      if (sender) bot.chat(`@${sender} 不明なアイテム: ${itemName}`);
-      return;
-    }
+    if (!itemDef) { bot.chat(`不明なアイテム: ${itemName}`); return; }
 
     (async () => {
       try {
-        if (sender) bot.chat(`@${sender} 自動採集つきクラフト: ${ctx.getJaItemName(itemName)} x${desired}`);
+        bot.chat(`自動採集つきクラフト: ${ctx.getJaItemName(itemName)} x${desired}`);
         const ok = await ctx.craftWithAuto(itemDef.id, desired, sender, 0);
 
         if (ok) {
-          if (sender) bot.chat(`@${sender} クラフト完了: ${ctx.getJaItemName(itemName)} x${desired}`);
+          bot.chat(`クラフト完了: ${ctx.getJaItemName(itemName)} x${desired}`);
         } else {
-          if (sender) bot.chat(`@${sender} 作れませんでした: ${ctx.getJaItemName(itemName)}`);
+          bot.chat(`作れませんでした: ${ctx.getJaItemName(itemName)}`);
         }
       } catch (e) {
-        if (sender) bot.chat(`@${sender} 失敗: ${e.message}`);
+        bot.chat(`失敗: ${e.message}`);
       }
     })();
   });

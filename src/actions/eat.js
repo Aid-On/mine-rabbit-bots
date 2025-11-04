@@ -99,20 +99,20 @@ export function register(bot, commandHandlers, ctx) {
       return;
     }
     const sub = (args[0] || 'status').toLowerCase();
-    if (sub === 'on' || sub === 'start') { startAutoEat(); try { bot.chat(`@${sender} 自動食事を開始`); } catch (_) {} return; }
-    if (sub === 'off' || sub === 'stop') { stopAutoEat(); try { bot.chat(`@${sender} 自動食事を停止`); } catch (_) {} return; }
+    if (sub === 'on' || sub === 'start') { startAutoEat(); try { bot.chat('自動食事を開始'); } catch (_) {} return; }
+    if (sub === 'off' || sub === 'stop') { stopAutoEat(); try { bot.chat('自動食事を停止'); } catch (_) {} return; }
     if (sub === 'once') {
       try {
         const ok = await eatOnce();
-        try { bot.chat(`@${sender} ${ok ? '食べました' : '食べられませんでした'}`); } catch (_) {}
+        try { bot.chat(ok ? '食べました' : '食べられませんでした'); } catch (_) {}
       } catch (e) {
-        try { bot.chat(`@${sender} 失敗: ${e?.message || e}`); } catch (_) {}
+        try { bot.chat(`失敗: ${e?.message || e}`); } catch (_) {}
       }
       return;
     }
     // status
     const status = eatTimer ? 'ON' : 'OFF';
-    try { bot.chat(`@${sender} 自動食事: ${status}`); } catch (_) {}
+    try { bot.chat(`自動食事: ${status}`); } catch (_) {}
   };
 
   commandHandlers.set('eat', eatHandler);

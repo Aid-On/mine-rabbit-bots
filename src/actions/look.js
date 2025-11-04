@@ -1,6 +1,6 @@
 export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('look', ({ args, sender }) => {
-    const say = (m) => { if (sender) bot.chat(`@${sender} ${m}`); else bot.chat(m); };
+    const say = (m) => { bot.chat(m); };
     const eye = bot.entity.position.offset(0, 1.6, 0);
     const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ','/?','?'].includes(String(a||'').toLowerCase()));
 

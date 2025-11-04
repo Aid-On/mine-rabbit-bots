@@ -26,21 +26,21 @@ export function register(bot, commandHandlers, ctx) {
       try {
         const furnace = await ctx.openOrApproachFurnace();
         const pickInventoryItemByName = (name) => { name = String(name || '').replace(/^minecraft:/, '').toLowerCase(); return bot.inventory.items().find((i) => i.name === name) || null; };
-        const putCommon = async (slotKind, a) => { const a0=a[0]; const a1=a[1]; const isNum0=!isNaN(Number(a0)); const isNum1=!isNaN(Number(a1)); const name=(isNum0?a1:a0)||''; const count=Math.max(1,Math.min(64,Number(isNum0?a0:(isNum1?a1:1)))); const item=pickInventoryItemByName(name); if(!item){ bot.chat(sender?`@${sender} 所持していません: ${name}`:`所持していません: ${name}`); furnace.close(); return;} const fn=slotKind==='input'?furnace.putInput:furnace.putFuel; await fn.call(furnace,item.type,null,count); bot.chat(sender?`@${sender} かまどに ${ctx.getJaItemName(item.name)} x${count} を投入(${slotKind})`:'ok'); furnace.close(); };
-        const takeCommon = async (what) => { const map={ input:furnace.takeInput, fuel:furnace.takeFuel, output:furnace.takeOutput }; const fn=map[what]; if(!fn){ bot.chat(sender?`@${sender} take は input|fuel|output`:'take: input|fuel|output'); furnace.close(); return;} try{ const it=await fn.call(furnace); if (it) bot.chat(sender?`@${sender} 回収: ${ctx.getJaItemName(it.name)} x${it.count}`:'took'); else bot.chat(sender?`@${sender} 取り出せるアイテムがありません`:'empty'); } finally{ furnace.close(); } };
+        const putCommon = async (slotKind, a) => { const a0=a[0]; const a1=a[1]; const isNum0=!isNaN(Number(a0)); const isNum1=!isNaN(Number(a1)); const name=(isNum0?a1:a0)||''; const count=Math.max(1,Math.min(64,Number(isNum0?a0:(isNum1?a1:1)))); const item=pickInventoryItemByName(name); if(!item){ bot.chat(`所持していません: ${name}`); furnace.close(); return;} const fn=slotKind==='input'?furnace.putInput:furnace.putFuel; await fn.call(furnace,item.type,null,count); bot.chat(`かまどに ${ctx.getJaItemName(item.name)} x${count} を投入(${slotKind})`); furnace.close(); };
+        const takeCommon = async (what) => { const map={ input:furnace.takeInput, fuel:furnace.takeFuel, output:furnace.takeOutput }; const fn=map[what]; if(!fn){ bot.chat('take は input|fuel|output'); furnace.close(); return;} try{ const it=await fn.call(furnace); if (it) bot.chat(`回収: ${ctx.getJaItemName(it.name)} x${it.count}`); else bot.chat('取り出せるアイテムがありません'); } finally{ furnace.close(); } };
         if (sub === 'input' || sub === 'in') { await putCommon('input', rest); }
         else if (sub === 'fuel') { await putCommon('fuel', rest); }
-        else if (sub === 'put') { const kind=(rest[0]||'').toLowerCase(); if(kind!=='input'&&kind!=='fuel'){ bot.chat(sender?`@${sender} put は input|fuel を指定`:'put: input|fuel'); furnace.close(); return; } await putCommon(kind, rest.slice(1)); }
+        else if (sub === 'put') { const kind=(rest[0]||'').toLowerCase(); if(kind!=='input'&&kind!=='fuel'){ bot.chat('put は input|fuel を指定'); furnace.close(); return; } await putCommon(kind, rest.slice(1)); }
         else if (sub === 'take') { const what=(rest[0]||'output').toLowerCase(); await takeCommon(what); }
         else if (sub === 'load') {
-          if (!rest || rest.length === 0) { bot.chat(sender?`@${sender} 使用: furnace load <inputName> [count] [fuelName] [fuelCount]`:'usage: furnace load <inputName> [count] [fuelName] [fuelCount]'); furnace.close(); return; }
-          const pIn=parseNameCount(rest); const inItem=pickInventoryItemByName(pIn.name); if(!inItem){ bot.chat(sender?`@${sender} 所持していません: ${pIn.name}`:`所持していません: ${pIn.name}`); furnace.close(); return; } await furnace.putInput(inItem.type,null,pIn.count);
+          if (!rest || rest.length === 0) { bot.chat('使用: furnace load <inputName> [count] [fuelName] [fuelCount]'); furnace.close(); return; }
+          const pIn=parseNameCount(rest); const inItem=pickInventoryItemByName(pIn.name); if(!inItem){ bot.chat(`所持していません: ${pIn.name}`); furnace.close(); return; } await furnace.putInput(inItem.type,null,pIn.count);
           const rest2 = rest.slice(Math.max(1,pIn.consumed));
-          if (rest2.length > 0){ const pFuel=parseNameCount(rest2); const fuelItem=pickInventoryItemByName(pFuel.name); if(!fuelItem){ bot.chat(sender?`@${sender} 燃料を所持していません: ${pFuel.name}`:`燃料を所持していません: ${pFuel.name}`); furnace.close(); return;} await furnace.putFuel(fuelItem.type,null,pFuel.count); bot.chat(sender?`@${sender} かまどに投入: 入力 ${ctx.getJaItemName(inItem.name)} x${pIn.count}, 燃料 ${ctx.getJaItemName(fuelItem.name)} x${pFuel.count}`:'loaded'); furnace.close(); }
-          else { try { await ctx.ensureFuelInFurnace(furnace,pIn.count,sender); bot.chat(sender?`@${sender} かまどに投入: 入力 ${ctx.getJaItemName(inItem.name)} x${pIn.count}（燃料は自動投入）`:'loaded'); } finally { furnace.close(); } }
+          if (rest2.length > 0){ const pFuel=parseNameCount(rest2); const fuelItem=pickInventoryItemByName(pFuel.name); if(!fuelItem){ bot.chat(`燃料を所持していません: ${pFuel.name}`); furnace.close(); return;} await furnace.putFuel(fuelItem.type,null,pFuel.count); bot.chat(`かまどに投入: 入力 ${ctx.getJaItemName(inItem.name)} x${pIn.count}, 燃料 ${ctx.getJaItemName(fuelItem.name)} x${pFuel.count}`); furnace.close(); }
+          else { try { await ctx.ensureFuelInFurnace(furnace,pIn.count,sender); bot.chat(`かまどに投入: 入力 ${ctx.getJaItemName(inItem.name)} x${pIn.count}（燃料は自動投入）`); } finally { furnace.close(); } }
         }
-        else { bot.chat(sender?`@${sender} 使用: furnace <input|fuel|take|load>`:'usage: furnace <input|fuel|take|load>'); furnace.close(); }
-      } catch (e) { bot.chat(sender?`@${sender} 失敗: ${e.message}`:`失敗: ${e.message}`); }
+        else { bot.chat('使用: furnace <input|fuel|take|load>'); furnace.close(); }
+      } catch (e) { bot.chat(`失敗: ${e.message}`); }
     })();
   });
 }

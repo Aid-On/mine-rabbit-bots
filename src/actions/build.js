@@ -13,10 +13,7 @@ export function register(bot, commandHandlers, ctx) {
     }
 
     const item = bot.inventory.items().find((i) => i.name === blockName);
-    if (!item) {
-      bot.chat(sender ? `@${sender} インベントリに ${ctx.getJaItemName(blockName)} がありません` : `no ${blockName}`);
-      return;
-    }
+    if (!item) { bot.chat(`インベントリに ${ctx.getJaItemName(blockName)} がありません`); return; }
 
     const { front, back, left, right } = ctx.yawToDir();
     const base = bot.entity.position.floored();
@@ -69,7 +66,7 @@ export function register(bot, commandHandlers, ctx) {
     }
 
     if (!targetPos) {
-      bot.chat(sender ? `@${sender} 近くに設置できる場所が見つかりません` : 'no place');
+      bot.chat('近くに設置できる場所が見つかりません');
       return;
     }
 
@@ -84,10 +81,7 @@ export function register(bot, commandHandlers, ctx) {
     }
 
     if (!ref) ref = findRef(targetPos);
-    if (!ref) {
-      bot.chat(sender ? `@${sender} 参照ブロックが見つからず設置できません` : 'no ref');
-      return;
-    }
+    if (!ref) { bot.chat('参照ブロックが見つからず設置できません'); return; }
 
     (async () => {
       try {
@@ -95,10 +89,10 @@ export function register(bot, commandHandlers, ctx) {
         bot.setControlState('sneak', true);
         await bot.placeBlock(ref.refBlock, ref.face);
 
-        bot.chat(sender ? `@${sender} ${ctx.getJaItemName(blockName)} を設置しました` : 'placed');
+        bot.chat(`${ctx.getJaItemName(blockName)} を設置しました`);
       } catch (err) {
         ctx.log?.(`設置できませんでした: ${err.message}`);
-        bot.chat(sender ? `@${sender} 設置失敗: ${err.message}` : `fail: ${err.message}`);
+        bot.chat(`設置失敗: ${err.message}`);
       } finally {
         setTimeout(() => bot.setControlState('sneak', false), 300);
       }

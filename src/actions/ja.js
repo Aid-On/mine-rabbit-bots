@@ -11,7 +11,7 @@ export function register(bot, commandHandlers, ctx) {
       return;
     }
     const en = (args[0] || '').replace(/^minecraft:/, '').toLowerCase();
-    bot.chat(sender ? `@${sender} ${en} → ${ctx.getJaItemName(en)}` : `${en} → ${ctx.getJaItemName(en)}`);
+    bot.chat(`${en} → ${ctx.getJaItemName(en)}`);
   });
 
   commandHandlers.set('jaadd', ({ args, sender }) => {
@@ -25,9 +25,7 @@ export function register(bot, commandHandlers, ctx) {
     const ja = args.slice(1).join(' ');
     const dict = ctx.getJaDict();
     dict[en] = ja;
-    ctx.saveJaDict().then((ok) => {
-      bot.chat(sender ? `@${sender} 登録: ${en} → ${ja} ${ok ? '(保存済)' : '(保存失敗)'}` : `登録: ${en} → ${ja}`);
-    });
+    ctx.saveJaDict().then((ok) => { bot.chat(`登録: ${en} → ${ja} ${ok ? '(保存済)' : '(保存失敗)'}`); });
   });
 
   commandHandlers.set('jadel', ({ args, sender }) => {
@@ -40,18 +38,16 @@ export function register(bot, commandHandlers, ctx) {
     const dict = ctx.getJaDict();
     if (dict[en]) {
       delete dict[en];
-      ctx.saveJaDict().then((ok) => {
-        bot.chat(sender ? `@${sender} 削除: ${en} ${ok ? '(保存済)' : '(保存失敗)'}` : `削除: ${en}`);
-      });
+      ctx.saveJaDict().then((ok) => { bot.chat(`削除: ${en} ${ok ? '(保存済)' : '(保存失敗)'}`); });
     } else {
-      bot.chat(sender ? `@${sender} 未登録: ${en}` : `未登録: ${en}`);
+      bot.chat(`未登録: ${en}`);
     }
   });
 
   commandHandlers.set('jaload', async ({ args = [], sender }) => {
     if (hasHelp(args)) { bot.chat('日本語辞書を再読み込みします。'); bot.chat('使用: jaload'); return; }
-    try { await ctx.loadJaDict(); bot.chat(sender ? `@${sender} 日本語辞書を再読み込みしました（${Object.keys(ctx.getJaDict()).length}件）` : 'OK'); }
-    catch (e) { bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`); }
+    try { await ctx.loadJaDict(); bot.chat(`日本語辞書を再読み込みしました（${Object.keys(ctx.getJaDict()).length}件）`); }
+    catch (e) { bot.chat(`失敗: ${e.message}`); }
   });
 
   commandHandlers.set('jaimport', async ({ args, sender }) => {
@@ -83,7 +79,7 @@ export function register(bot, commandHandlers, ctx) {
         }
         await ctx.saveJaDict(); added = count;
       } else { throw new Error('拡張子は .json / .csv / .tsv を指定してください'); }
-      bot.chat(sender ? `@${sender} 取り込み: ${rel} → ${added}件` : `取り込み: ${added}`);
-    } catch (e) { bot.chat(sender ? `@${sender} 失敗: ${e.message}` : `失敗: ${e.message}`); }
+      bot.chat(`取り込み: ${rel} → ${added}件`);
+    } catch (e) { bot.chat(`失敗: ${e.message}`); }
   });
 }

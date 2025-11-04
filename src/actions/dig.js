@@ -32,18 +32,18 @@ export function register(bot, commandHandlers, ctx) {
         const def = mc.blocksByName[blockName];
         if (!def) {
           ctx.log?.(`不明なブロック名: ${blockName}`);
-          bot.chat(`@${sender} 不明なブロック名: ${blockName}`);
+          bot.chat(`不明なブロック名: ${blockName}`);
           return;
         }
 
-        bot.chat(`@${sender} ${ctx.getJaItemName(blockName)} を ${count} 個掘ります`);
+        bot.chat(`${ctx.getJaItemName(blockName)} を ${count} 個掘ります`);
         let mined = 0;
 
         for (let i = 0; i < count; i++) {
           const [pos] = ctx.findNearestBlockByName(blockName, { maxDistance: 24, count: 1 });
           if (!pos) {
             ctx.log?.(`近くに ${blockName} が見つかりませんでした（進捗 ${mined}/${count}）`);
-            bot.chat(`@${sender} 近くに ${ctx.getJaItemName(blockName)} が見つかりません（${mined}/${count}個完了）`);
+            bot.chat(`近くに ${ctx.getJaItemName(blockName)} が見つかりません（${mined}/${count}個完了）`);
             break;
           }
 
@@ -58,18 +58,18 @@ export function register(bot, commandHandlers, ctx) {
             }
           } catch (err) {
             ctx.log?.(`掘削に失敗: ${err.message}`);
-            bot.chat(`@${sender} 掘削に失敗: ${err.message}（${mined}/${count}個完了）`);
+            bot.chat(`掘削に失敗: ${err.message}（${mined}/${count}個完了）`);
             break;
           }
         }
 
         if (mined === count) {
-          bot.chat(`@${sender} 掘削完了: ${ctx.getJaItemName(blockName)} x${count}`);
+          bot.chat(`掘削完了: ${ctx.getJaItemName(blockName)} x${count}`);
         } else if (mined > 0) {
-          bot.chat(`@${sender} 部分完了: ${ctx.getJaItemName(blockName)} x${mined}/${count}`);
+          bot.chat(`部分完了: ${ctx.getJaItemName(blockName)} x${mined}/${count}`);
         }
       } catch (e) {
-        bot.chat(`@${sender} エラー: ${e.message}`);
+        bot.chat(`エラー: ${e.message}`);
       }
     })();
   });
