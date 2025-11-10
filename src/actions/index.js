@@ -15,10 +15,13 @@ import * as perf from './perf.js';
 import * as fish from './fish.js';
 import * as eat from './eat.js';
 import * as skin from './skin.js';
+import * as sleep from './sleep.js';
+import * as light from './light.js';
+import * as time from './time.js';
 
 export function registerActions(bot, commandHandlers, ctx) {
   const modules = [
-    look, status, ping, follow, jump, items, help, ja, build, dig, chest, craft, furnace, perf, fish, eat, skin
+    look, status, ping, follow, jump, items, help, ja, build, dig, chest, craft, furnace, perf, fish, eat, skin, sleep, light, time
   ];
   for (const m of modules) {
     try {
