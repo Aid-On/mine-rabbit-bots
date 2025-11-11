@@ -44,12 +44,16 @@ export function register(bot, commandHandlers, ctx) {
     if (hasHelp(args)) {
       say('暗い場合に等間隔で光源を設置します。');
       say('使用: light [interval] [count] [itemName]');
-      say('例: light 6 10 torch');
+      say('      light once [itemName]  （1つだけ設置）');
+      say('例: light 6 10 torch / light once torch');
       return;
     }
-    const interval = Math.max(2, Math.min(16, Number(args[0] || 6) || 6));
-    const count = Math.max(1, Math.min(64, Number(args[1] || 8) || 8));
-    const itemName = args[2] ? String(args[2]).toLowerCase() : null;
+    const a0 = String(args[0] || '').toLowerCase();
+    const isOnce = ['once','one','1','ここ','一つ','ひとつ'].includes(a0);
+    const interval = isOnce ? 6 : Math.max(2, Math.min(16, Number(args[0] || 6) || 6));
+    const count = isOnce ? 1 : Math.max(1, Math.min(64, Number(args[1] || 8) || 8));
+    const itemName = isOnce ? (args[1] ? String(args[1]).toLowerCase() : null)
+                            : (args[2] ? String(args[2]).toLowerCase() : null);
 
     const base = bot.entity.position.floored();
     const { front } = ctx.yawToDir();
@@ -58,19 +62,36 @@ export function register(bot, commandHandlers, ctx) {
     dir.y = 0;
 
     let placed = 0;
+    // 掘削は無効化（設置のために道を掘らない）
+    const m = bot.pathfinder?.movements;
+    const prevCanDig = m && typeof m.canDig === 'boolean' ? m.canDig : null;
+    if (m && prevCanDig !== null) m.canDig = false;
+    try {
     for (let i = 0; i < count; i++) {
-      const step = i === 0 ? 0 : interval * i;
+      const step = isOnce ? 0 : (i === 0 ? 0 : interval * i);
       const target = base.plus({ x: Math.round(dir.x * step), y: 0, z: Math.round(dir.z * step) });
-      // 足元の高さに合わせる
+      // 足元の高さ基準で、地面+空気セルを上下±2探索
       const here = bot.blockAt(bot.entity.position.floored());
       const ty = here ? here.position.y : base.y;
-      const tp = target.offset(0, ty - target.y, 0);
+      const base2D = target.offset(0, ty - target.y, 0);
+      let tp = base2D.offset(0, 1, 0);
+      const isSolid = ctx.isSolid || (() => false);
+      for (let dy = 2; dy >= -2; dy--) {
+        const gp = base2D.offset(0, dy, 0);
+        const ground = bot.blockAt(gp);
+        const head = bot.blockAt(gp.offset(0, 1, 0));
+        if (ground && isSolid(ground) && (!head || head.name === 'air')) { tp = gp.offset(0, 1, 0); break; }
+      }
 
       if (!getAmbientDark(tp)) continue;
-      try { if (ctx.gotoBlock) await ctx.gotoBlock(tp); } catch (_) {}
+      // 地面（tpの1つ下）へ移動
+      try { if (ctx.gotoBlock) await ctx.gotoBlock(tp.offset(0, -1, 0)); } catch (_) {}
       const ok = await placeAt(tp, itemName);
       if (ok) placed++;
       await new Promise(r => setTimeout(r, 120));
+    }
+    } finally {
+      if (m && prevCanDig !== null) m.canDig = prevCanDig;
     }
     say(placed > 0 ? `設置: 光源 x${placed}` : '設置対象がありません（明るい／光源無し）');
   };
