@@ -4,7 +4,7 @@ export function register(bot, commandHandlers) {
 
   const showOverview = (_sender) => {
     sayNM('— ヘルプ —');
-    sayNM('基本: ping, status, time|day|night, eat, fish, sleep|wake, follow|come|stop, look, jump');
+    sayNM('基本: ping, status, time|day|night, eat, fish, sleep|wake, follow|come|stop, look, jump, fight');
     sayNM('行動: dig, build, items, light');
     sayNM('生産: craft, craftauto, furnace, smeltauto, chest');
     sayNM('ユーティリティ: skin, perf, ja, jaload, jaadd, jadel, jaimport');

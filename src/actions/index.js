@@ -18,10 +18,11 @@ import * as skin from './skin.js';
 import * as sleep from './sleep.js';
 import * as light from './light.js';
 import * as time from './time.js';
+import * as fight from './fight.js';
 
 export function registerActions(bot, commandHandlers, ctx) {
   const modules = [
-    look, status, ping, follow, jump, items, help, ja, build, dig, chest, craft, furnace, perf, fish, eat, skin, sleep, light, time
+    look, status, ping, follow, jump, items, help, ja, build, dig, chest, craft, furnace, perf, fish, eat, skin, sleep, light, time, fight
   ];
   for (const m of modules) {
     try {
