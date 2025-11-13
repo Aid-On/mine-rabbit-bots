@@ -1,14 +1,9 @@
 #!/usr/bin/env node
 import { createBot } from 'mineflayer';
 import pathfinderPlugin from 'mineflayer-pathfinder';
-import builderPkg from 'mineflayer-builder';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import './env.js';
-
-const builderPlugin = builderPkg.builder;
-console.log('builderPlugin type:', typeof builderPlugin);
-console.log('builderPlugin:', builderPlugin);
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { registerActions } from './actions/index.js';
@@ -111,18 +106,6 @@ bot.once('spawn', () => {
   const defaultMove = new Movements(bot, mcDataGlobal);
   if (bot.pathfinder?.setMovements) {
     bot.pathfinder.setMovements(defaultMove);
-  }
-
-  // builderプラグインをロード
-  try {
-    bot.loadPlugin(builderPlugin);
-    log('mineflayer-builderプラグインをロードしました');
-    log(`bot.builder exists: ${!!bot.builder}`);
-    if (bot.builder) {
-      log(`bot.builder methods: ${Object.keys(bot.builder).join(', ')}`);
-    }
-  } catch (error) {
-    log(`builderプラグインのロードに失敗: ${error.message}`);
   }
 
   // 日本語辞書の読み込み（存在すれば）

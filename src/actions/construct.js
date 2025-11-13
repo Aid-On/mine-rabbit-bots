@@ -1,7 +1,7 @@
 /**
  * construct アクション: .schematic ファイルから建築を行う
  */
-import { loadSchematic, getMaterialsFromSchematic, checkMaterials, buildSchematic, getSchematicInfo, cancelBuild } from '../lib/builder.js';
+import { loadSchematic, getMaterialsFromSchematic, checkMaterials, buildSchematic, getSchematicInfo } from '../lib/builder.js';
 import { resolve } from 'path';
 import { Vec3 } from 'vec3';
 
@@ -55,7 +55,7 @@ export function register(bot, commandHandlers, ctx) {
         bot.chat(`設計書: ${fileName} (${info.size.x}x${info.size.y}x${info.size.z}, ${info.blockCount}ブロック)`);
 
         // 必要な材料をチェック
-        const materials = getMaterialsFromSchematic(schematic);
+        const materials = getMaterialsFromSchematic(schematic, ctx.mcData());
         const check = checkMaterials(bot, materials);
 
         if (!check.hasAll) {
@@ -77,7 +77,14 @@ export function register(bot, commandHandlers, ctx) {
         buildState.currentFile = fileName;
 
         // 建築実行
-        await buildSchematic(bot, schematic, buildPos, { facing });
+        await buildSchematic(bot, schematic, buildPos, ctx, {
+          facing,
+          onProgress: (placed, total) => {
+            if (placed % 10 === 0 || placed === total) {
+              ctx.log?.(`建築進捗: ${placed}/${total} (${Math.floor((placed/total)*100)}%)`);
+            }
+          }
+        });
 
         bot.chat(`建築完了: ${fileName}`);
         buildState.isBuilding = false;
@@ -116,7 +123,7 @@ export function register(bot, commandHandlers, ctx) {
         bot.chat(`ブロック数: ${info.blockCount}個`);
 
         // 必要な材料
-        const materials = getMaterialsFromSchematic(schematic);
+        const materials = getMaterialsFromSchematic(schematic, ctx.mcData());
         bot.chat('必要な材料:');
 
         let count = 0;
@@ -153,16 +160,10 @@ export function register(bot, commandHandlers, ctx) {
       return;
     }
 
-    try {
-      cancelBuild(bot);
-      bot.chat(`建築を中断しました: ${buildState.currentFile || ''}`);
-      buildState.isBuilding = false;
-      buildState.currentSchematic = null;
-      buildState.currentFile = null;
-    } catch (error) {
-      ctx.log?.(`中断エラー: ${error.message}`);
-      bot.chat(`中断エラー: ${error.message}`);
-    }
+    bot.chat(`建築を中断しました: ${buildState.currentFile || ''}`);
+    buildState.isBuilding = false;
+    buildState.currentSchematic = null;
+    buildState.currentFile = null;
   });
 
   /**

@@ -1,24 +1,22 @@
 /**
- * mineflayer-builder を使った建築機能
+ * prismarine-schematic を使った建築機能
  * .schematic ファイルから建築を行う
  */
 import { readFile } from 'fs/promises';
 import { Vec3 } from 'vec3';
+import { Schematic } from 'prismarine-schematic';
 
 /**
  * .schematic ファイルを読み込む
- * mineflayer-builder の loadSchematic を使用
+ * prismarine-schematic を使用
  * @param {Object} bot - mineflayer bot
  * @param {string} filePath - .schematic ファイルのパス
  * @returns {Promise<Object>} schematic データ
  */
 export async function loadSchematic(bot, filePath) {
   try {
-    if (!bot.builder || typeof bot.builder.loadSchematic !== 'function') {
-      throw new Error('mineflayer-builder プラグインがロードされていません');
-    }
-
-    const schematic = await bot.builder.loadSchematic(filePath);
+    const fileData = await readFile(filePath);
+    const schematic = await Schematic.read(fileData, bot.version);
     return schematic;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -31,20 +29,27 @@ export async function loadSchematic(bot, filePath) {
 /**
  * schematic から必要な材料をリストアップ
  * @param {Object} schematic - schematic データ
+ * @param {Object} mcData - minecraft-data
  * @returns {Object} ブロック名と数量のマップ
  */
-export function getMaterialsFromSchematic(schematic) {
+export function getMaterialsFromSchematic(schematic, mcData) {
   const materials = {};
 
-  if (!schematic || !schematic.blocks) {
+  if (!schematic) {
     return materials;
   }
 
-  for (const block of schematic.blocks) {
-    if (!block || !block.name || block.name === 'air') continue;
+  const size = schematic.size();
 
-    const blockName = block.name;
-    materials[blockName] = (materials[blockName] || 0) + 1;
+  for (let y = 0; y < size.y; y++) {
+    for (let z = 0; z < size.z; z++) {
+      for (let x = 0; x < size.x; x++) {
+        const block = schematic.getBlock(new Vec3(x, y, z));
+        if (!block || block.name === 'air') continue;
+
+        materials[block.name] = (materials[block.name] || 0) + 1;
+      }
+    }
   }
 
   return materials;
@@ -78,59 +83,92 @@ export function checkMaterials(bot, materials) {
 }
 
 /**
- * schematic を指定位置に建築
+ * schematic を指定位置に建築（手動実装）
  * @param {Object} bot - mineflayer bot
  * @param {Object} schematic - schematic データ
  * @param {Vec3} position - 建築開始位置
- * @param {Object} options - オプション { facing: string }
+ * @param {Object} ctx - コンテキスト
+ * @param {Object} options - オプション { facing: string, onProgress: Function }
  * @returns {Promise<void>}
  */
-export async function buildSchematic(bot, schematic, position, options = {}) {
-  if (!bot.builder || typeof bot.builder.build !== 'function') {
-    throw new Error('mineflayer-builder プラグインがロードされていません');
-  }
+export async function buildSchematic(bot, schematic, position, ctx, options = {}) {
+  const size = schematic.size();
+  const blocks = [];
 
-  // facing: 'north', 'south', 'east', 'west'
-  const facing = options.facing || 'north';
+  // schematicから全ブロックを取得
+  for (let y = 0; y < size.y; y++) {
+    for (let z = 0; z < size.z; z++) {
+      for (let x = 0; x < size.x; x++) {
+        const block = schematic.getBlock(new Vec3(x, y, z));
+        if (!block || block.name === 'air') continue;
 
-  try {
-    await bot.builder.build(schematic, position, { facing });
-  } catch (error) {
-    throw new Error(`建築エラー: ${error.message}`);
-  }
-}
-
-/**
- * 建築の進捗を監視
- * @param {Object} bot - mineflayer bot
- * @param {Function} onProgress - 進捗コールバック (placed, total)
- */
-export function watchBuildProgress(bot, onProgress) {
-  if (!bot.builder) return null;
-
-  const handler = (data) => {
-    if (onProgress && data) {
-      onProgress(data.placed || 0, data.total || 0);
+        const worldPos = position.offset(x, y, z);
+        blocks.push({
+          x: worldPos.x,
+          y: worldPos.y,
+          z: worldPos.z,
+          name: block.name
+        });
+      }
     }
-  };
-
-  // イベントハンドラを登録
-  bot.on('builder_progress', handler);
-
-  // クリーンアップ関数を返す
-  return () => {
-    bot.removeListener('builder_progress', handler);
-  };
-}
-
-/**
- * 建築をキャンセル
- * @param {Object} bot - mineflayer bot
- */
-export function cancelBuild(bot) {
-  if (bot.builder && typeof bot.builder.stop === 'function') {
-    bot.builder.stop();
   }
+
+  // 下から上へソート
+  blocks.sort((a, b) => {
+    if (a.y !== b.y) return a.y - b.y;
+    return 0;
+  });
+
+  let placed = 0;
+  const total = blocks.length;
+
+  for (const blockInfo of blocks) {
+    try {
+      const targetPos = new Vec3(blockInfo.x, blockInfo.y, blockInfo.z);
+
+      // アイテムを装備
+      const item = bot.inventory.items().find(i => i.name === blockInfo.name);
+      if (!item) {
+        throw new Error(`${blockInfo.name} が不足しています`);
+      }
+
+      // すでにブロックがある場合はスキップ
+      const existingBlock = bot.blockAt(targetPos);
+      if (existingBlock && existingBlock.name !== 'air') {
+        placed++;
+        if (options.onProgress) options.onProgress(placed, total);
+        continue;
+      }
+
+      // 参照ブロックを探す
+      const ref = ctx.findPlaceRefForTarget(targetPos);
+      if (!ref) {
+        ctx.log?.(`${targetPos} に設置できません: 参照ブロックが見つかりません`);
+        placed++;
+        if (options.onProgress) options.onProgress(placed, total);
+        continue;
+      }
+
+      // ブロックを設置
+      await bot.equip(item, 'hand');
+      bot.setControlState('sneak', true);
+
+      try {
+        await bot.placeBlock(ref.refBlock, ref.face);
+        placed++;
+        if (options.onProgress) options.onProgress(placed, total);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } finally {
+        bot.setControlState('sneak', false);
+      }
+
+    } catch (error) {
+      ctx.log?.(`ブロック配置エラー: ${error.message}`);
+      throw error;
+    }
+  }
+
+  return placed;
 }
 
 /**
@@ -143,13 +181,17 @@ export function getSchematicInfo(schematic) {
     return { size: new Vec3(0, 0, 0), blockCount: 0 };
   }
 
-  const size = new Vec3(
-    schematic.width || 0,
-    schematic.height || 0,
-    schematic.length || 0
-  );
+  const size = schematic.size();
+  let blockCount = 0;
 
-  const blockCount = schematic.blocks ? schematic.blocks.filter(b => b && b.name !== 'air').length : 0;
+  for (let y = 0; y < size.y; y++) {
+    for (let z = 0; z < size.z; z++) {
+      for (let x = 0; x < size.x; x++) {
+        const block = schematic.getBlock(new Vec3(x, y, z));
+        if (block && block.name !== 'air') blockCount++;
+      }
+    }
+  }
 
   return { size, blockCount };
 }
