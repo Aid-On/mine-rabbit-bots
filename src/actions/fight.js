@@ -1,3 +1,5 @@
+import { isWeapon, bestWeapon, ensureWeaponEquipped, findNearestHostile, findNearestHostileWithin, findByName, collectNearbyDrops } from './fight2.js';
+
 export function register(bot, commandHandlers, ctx) {
   const say = (m) => { try { bot.chat(m); } catch (_) {} };
   const hasHelp = (arr=[]) => arr.some(a => ['-h','--help','help','ヘルプ','/?','?'].includes(String(a||'').toLowerCase()));
@@ -14,73 +16,21 @@ export function register(bot, commandHandlers, ctx) {
   let currentTask = null; // { name: string|null, count: number }
   let killSpots = [];
   let lastTargetPos = null;
+  let lastEncounterAt = 0;
+  let lastHP = null;
 
   const hostileNames = new Set([
     'zombie','husk','drowned','zombie_villager','skeleton','stray','wither_skeleton','creeper','spider','cave_spider','enderman','slime','magma_cube','witch','vindicator','evoker','pillager','ravager','phantom','vex','guardian','elder_guardian','hoglin','zoglin','piglin_brute','blaze','ghast','wither','warden','shulker','silverfish','endermite','guardian','phantom'
   ]);
 
-  const bestWeapon = () => {
-    const inv = bot.inventory.items();
-    // 優先: sword > axe > それ以外
-    const swords = inv.filter(it => /_sword$/.test(it.name));
-    if (swords.length) {
-      swords.sort((a,b) => tierRank(a.name) - tierRank(b.name));
-      return swords[0];
-    }
-    const axes = inv.filter(it => /_axe$/.test(it.name));
-    if (axes.length) {
-      axes.sort((a,b) => tierRank(a.name) - tierRank(b.name));
-      return axes[0];
-    }
-    return null;
-  };
-  const tierRank = (name='') => {
-    if (name.includes('netherite')) return 0;
-    if (name.includes('diamond')) return 1;
-    if (name.includes('iron')) return 2;
-    if (name.includes('stone')) return 3;
-    if (name.includes('gold')) return 4;
-    if (name.includes('wood')) return 5;
-    return 9;
-  };
+  // weapon helpers moved to fight2.js
 
-  const findNearestHostile = () => {
-    let best = null; let bestD2 = Infinity;
-    for (const id in bot.entities) {
-      const e = bot.entities[id];
-      if (!e || e === bot.entity) continue;
-      if (e.type !== 'mob') continue;
-      const name = String(e.name || '').toLowerCase();
-      if (!hostileNames.has(name)) continue;
-      const d2 = e.position.distanceSquared(bot.entity.position);
-      if (d2 < bestD2) { best = e; bestD2 = d2; }
-    }
-    return best;
-  };
+  // finder helpers moved to fight2.js
 
-  const findByName = (query) => {
-    const q = String(query || '').toLowerCase();
-    let best = null; let bestD2 = Infinity;
-    for (const id in bot.entities) {
-      const e = bot.entities[id];
-      if (!e || e === bot.entity) continue;
-      // 一部環境で type が 'animal' などの場合もあるため厳格フィルタをやめる
-      const name = String(e.name || e.displayName || '').toLowerCase();
-      if (!name.includes(q)) continue;
-      const d2 = e.position.distanceSquared(bot.entity.position);
-      if (d2 < bestD2) { best = e; bestD2 = d2; }
-    }
-    return best;
-  };
+  // name finder moved to fight2.js
 
   const isWeapon = (it) => !!it && (/(_sword$|_axe$)/.test(String(it.name||'')));
-  const equipWeapon = async () => {
-    const w = bestWeapon();
-    if (w) { try { await bot.equip(w, 'hand'); } catch (_) {} }
-  };
-  const ensureWeaponEquipped = async () => {
-    try { const hand = bot.heldItem || null; if (!isWeapon(hand)) await equipWeapon(); } catch (_) {}
-  };
+  // equip helpers moved to fight2.js
 
   const stopFight = () => {
     running = false;
@@ -115,24 +65,7 @@ export function register(bot, commandHandlers, ctx) {
   };
 
   let loopBusy = false;
-  const collectNearbyDrops = async (pos, { radius = 6, timeoutMs = 4000 } = {}) => {
-    const start = Date.now();
-    const nearItems = () => Object.values(bot.entities || {})
-      .filter((e) => e && e.name === 'item')
-      .filter((e) => e.position.distanceSquared(pos) <= radius * radius)
-      .sort((a, b) => a.position.distanceSquared(bot.entity.position) - b.position.distanceSquared(bot.entity.position));
-    while (Date.now() - start < timeoutMs) {
-      const items = nearItems();
-      if (items.length === 0) { await new Promise(r => setTimeout(r, 150)); continue; }
-      const it = items[0];
-      try {
-        if (bot.pathfinder?.goto) {
-          await bot.pathfinder.goto(new ctx.goals.GoalNear(it.position.x, it.position.y, it.position.z, 1));
-        }
-      } catch (_) {}
-      await new Promise(r => setTimeout(r, 120));
-    }
-  };
+  // drop collector moved to fight2.js
 
   const loop = async () => {
     if (loopBusy) return; loopBusy = true;
@@ -163,7 +96,7 @@ export function register(bot, commandHandlers, ctx) {
         }
       }
       // 次ターゲットを取得（現在のタスクに基づく）
-      const next = nameFilter ? findByName(nameFilter) : findNearestHostile();
+      const next = nameFilter ? findByName(bot, nameFilter) : findNearestHostile(bot, hostileNames);
       if (!next) { say('次のターゲットが見つかりません'); stopFight(); loopBusy = false; return; }
       targetEntity = next;
       say(`次のターゲット: ${next.name}（${killsDone}/${desiredKills}${nameFilter ? ` ${nameFilter}` : ''}）`);
@@ -205,7 +138,7 @@ export function register(bot, commandHandlers, ctx) {
 
   const startFight = async (entity) => {
     if (running) stopFight();
-    await equipWeapon();
+    await ensureWeaponEquipped(bot);
     // 掘削無効化
     const m = bot.pathfinder?.movements;
     if (m && prevCanDig === null && typeof m.canDig === 'boolean') prevCanDig = m.canDig;
@@ -249,8 +182,8 @@ export function register(bot, commandHandlers, ctx) {
 
     // ターゲット選定
     let e = null;
-    if (nameFilter) e = findByName(nameFilter) || null;
-    if (!e) e = findNearestHostile();
+    if (nameFilter) e = findByName(bot, nameFilter) || null;
+    if (!e) e = findNearestHostile(bot, hostileNames);
     if (!e) { say('ターゲットが見つかりません'); return; }
     try { await startFight(e); } catch (e2) { say(`開始失敗: ${e2?.message || e2}`); }
   };
@@ -262,4 +195,6 @@ export function register(bot, commandHandlers, ctx) {
   commandHandlers.set('戦う', (ctx2) => fightHandler(ctx2));
   commandHandlers.set('攻撃', (ctx2) => fightHandler(ctx2));
   commandHandlers.set('やめて', ({ sender }) => fightHandler({ args: ['stop'], sender }));
+
+  // 自動遭遇メッセージ・自動反撃は無効化（ユーザー指示の fight のみ実行）
 }
