@@ -57,10 +57,18 @@ export function getMaterialsFromSchematic(schematic, mcData) {
           const block = schematic.getBlock(pos);
 
           if (!block || block.name === 'air') continue;
-          materials[block.name] = (materials[block.name] || 0) + 1;
+
+          const blockName = block.name || 'unknown';
+          if (!blockName || blockName === 'unknown') {
+            console.log('Unknown block at', pos, ':', block);
+          }
+
+          materials[blockName] = (materials[blockName] || 0) + 1;
         }
       }
     }
+
+    console.log('Materials found:', materials);
   } catch (error) {
     console.error('getMaterialsFromSchematic error:', error);
     throw new Error(`材料計算に失敗: ${error.message}`);
