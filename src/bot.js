@@ -115,6 +115,10 @@ bot.once('spawn', () => {
   try {
     bot.loadPlugin(builderPlugin);
     log('mineflayer-builderプラグインをロードしました');
+    log(`bot.builder exists: ${!!bot.builder}`);
+    if (bot.builder) {
+      log(`bot.builder methods: ${Object.keys(bot.builder).join(', ')}`);
+    }
   } catch (error) {
     log(`builderプラグインのロードに失敗: ${error.message}`);
   }
