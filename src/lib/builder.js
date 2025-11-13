@@ -207,14 +207,27 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
         await bot.placeBlock(ref.refBlock, ref.face);
         placed++;
         if (options.onProgress) options.onProgress(placed, total);
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 200));
+      } catch (placeError) {
+        // タイムアウトエラーは無視して続行
+        if (placeError.message && placeError.message.includes('timeout')) {
+          ctx.log?.(`タイムアウト (続行): ${targetPos}`);
+          placed++;
+          if (options.onProgress) options.onProgress(placed, total);
+        } else {
+          ctx.log?.(`配置エラー: ${placeError.message}`);
+          placed++;
+          if (options.onProgress) options.onProgress(placed, total);
+        }
       } finally {
         bot.setControlState('sneak', false);
       }
 
     } catch (error) {
       ctx.log?.(`ブロック配置エラー: ${error.message}`);
-      throw error;
+      // エラーが起きても続行
+      placed++;
+      if (options.onProgress) options.onProgress(placed, total);
     }
   }
 
