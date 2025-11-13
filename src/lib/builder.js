@@ -47,11 +47,20 @@ export function getMaterialsFromSchematic(schematic, mcData) {
   }
 
   try {
-    // forEachメソッドを使用（prismarine-schematic推奨）
-    schematic.forEach((block, pos) => {
-      if (!block || block.name === 'air') return;
-      materials[block.name] = (materials[block.name] || 0) + 1;
-    });
+    const start = schematic.start();
+    const end = schematic.end();
+
+    for (let y = start.y; y < end.y; y++) {
+      for (let z = start.z; z < end.z; z++) {
+        for (let x = start.x; x < end.x; x++) {
+          const pos = new Vec3(x, y, z);
+          const block = schematic.getBlock(pos);
+
+          if (!block || block.name === 'air') continue;
+          materials[block.name] = (materials[block.name] || 0) + 1;
+        }
+      }
+    }
   } catch (error) {
     console.error('getMaterialsFromSchematic error:', error);
     throw new Error(`材料計算に失敗: ${error.message}`);
@@ -99,21 +108,30 @@ export function checkMaterials(bot, materials) {
 export async function buildSchematic(bot, schematic, position, ctx, options = {}) {
   const blocks = [];
 
-  // forEachメソッドを使用してブロック取得
   try {
-    schematic.forEach((block, pos) => {
-      if (!block || block.name === 'air') return;
+    const start = schematic.start();
+    const end = schematic.end();
 
-      const worldPos = position.offset(pos.x, pos.y, pos.z);
-      blocks.push({
-        x: worldPos.x,
-        y: worldPos.y,
-        z: worldPos.z,
-        name: block.name
-      });
-    });
+    for (let y = start.y; y < end.y; y++) {
+      for (let z = start.z; z < end.z; z++) {
+        for (let x = start.x; x < end.x; x++) {
+          const pos = new Vec3(x, y, z);
+          const block = schematic.getBlock(pos);
+
+          if (!block || block.name === 'air') continue;
+
+          const worldPos = position.offset(x - start.x, y - start.y, z - start.z);
+          blocks.push({
+            x: worldPos.x,
+            y: worldPos.y,
+            z: worldPos.z,
+            name: block.name
+          });
+        }
+      }
+    }
   } catch (error) {
-    console.error('buildSchematic forEach error:', error);
+    console.error('buildSchematic error:', error);
     throw new Error(`ブロック取得に失敗: ${error.message}`);
   }
 
@@ -186,32 +204,22 @@ export function getSchematicInfo(schematic) {
   }
 
   try {
-    // start()とend()を使ってサイズを計算
     const start = schematic.start();
     const end = schematic.end();
     const size = end.minus(start);
 
-    console.log('Schematic start:', start);
-    console.log('Schematic end:', end);
-    console.log('Schematic size:', size);
-    console.log('Has forEach?', typeof schematic.forEach);
-
     let blockCount = 0;
-    let airCount = 0;
-    let totalCalled = 0;
 
-    schematic.forEach((block, pos) => {
-      totalCalled++;
-      if (block && block.name !== 'air') {
-        blockCount++;
-      } else {
-        airCount++;
+    for (let y = start.y; y < end.y; y++) {
+      for (let z = start.z; z < end.z; z++) {
+        for (let x = start.x; x < end.x; x++) {
+          const pos = new Vec3(x, y, z);
+          const block = schematic.getBlock(pos);
+
+          if (block && block.name !== 'air') blockCount++;
+        }
       }
-    });
-
-    console.log('forEach called:', totalCalled, 'times');
-    console.log('Block count:', blockCount);
-    console.log('Air count:', airCount);
+    }
 
     return { size, blockCount };
   } catch (error) {
