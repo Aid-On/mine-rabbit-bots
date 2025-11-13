@@ -1,14 +1,12 @@
 /**
  * 建築機能
- * mineflayer-schem / .json ファイルから建築を行う
+ * .json ファイルから建築を行う
  */
 import { readFile } from 'fs/promises';
 import { Vec3 } from 'vec3';
-import { Schematic } from 'prismarine-schematic';
-import { Build } from 'mineflayer-schem';
 
 /**
- * .schematic / .json ファイルを読み込む
+ * .json ファイルを読み込む
  * @param {Object} bot - mineflayer bot
  * @param {string} filePath - 設計書ファイルのパス
  * @returns {Promise<Object>} schematic データ
@@ -16,16 +14,8 @@ import { Build } from 'mineflayer-schem';
 export async function loadSchematic(bot, filePath) {
   try {
     const fileData = await readFile(filePath);
-
-    // JSON形式かチェック
-    if (filePath.endsWith('.json')) {
-      const json = JSON.parse(fileData.toString());
-      return { type: 'json', data: json };
-    }
-
-    // .schem形式
-    const schematic = await Schematic.read(fileData, bot.version);
-    return { type: 'schem', data: schematic };
+    const json = JSON.parse(fileData.toString());
+    return { type: 'json', data: json };
   } catch (error) {
     if (error.code === 'ENOENT') {
       throw new Error(`設計書ファイルが見つかりません: ${filePath}`);
@@ -44,39 +34,13 @@ export async function loadSchematic(bot, filePath) {
 export function getMaterialsFromSchematic(schematic, mcData) {
   const materials = {};
 
-  if (!schematic) {
+  if (!schematic || schematic.type !== 'json') {
     return materials;
   }
 
-  try {
-    // JSON形式
-    if (schematic.type === 'json') {
-      const blocks = schematic.data.blocks.filter(b => b.block);
-      for (const block of blocks) {
-        materials[block.block] = (materials[block.block] || 0) + 1;
-      }
-      return materials;
-    }
-
-    // .schem形式
-    const start = schematic.data.start();
-    const end = schematic.data.end();
-
-    for (let y = start.y; y < end.y; y++) {
-      for (let z = start.z; z < end.z; z++) {
-        for (let x = start.x; x < end.x; x++) {
-          const pos = new Vec3(x, y, z);
-          const block = schematic.data.getBlock(pos);
-
-          if (!block || block.name === 'air' || !block.name) continue;
-
-          materials[block.name] = (materials[block.name] || 0) + 1;
-        }
-      }
-    }
-  } catch (error) {
-    console.error('getMaterialsFromSchematic error:', error);
-    throw new Error(`材料計算に失敗: ${error.message}`);
+  const blocks = schematic.data.blocks.filter(b => b.block);
+  for (const block of blocks) {
+    materials[block.block] = (materials[block.block] || 0) + 1;
   }
 
   return materials;
@@ -119,40 +83,11 @@ export function checkMaterials(bot, materials) {
  * @returns {Promise<void>}
  */
 export async function buildSchematic(bot, schematic, position, ctx, options = {}) {
-  // JSON形式の場合は手動実装（後方互換）
-  if (schematic.type === 'json') {
-    return await buildJsonFormat(bot, schematic.data, position, ctx, options);
+  if (schematic.type !== 'json') {
+    throw new Error('現在はJSON形式のみ対応しています');
   }
 
-  // .schem形式はmineflayer-schemに任せる
-  try {
-    if (!bot.builder) {
-      throw new Error('mineflayer-schemプラグインがロードされていません');
-    }
-
-    const build = new Build(schematic.data, bot.world, position);
-
-    const buildOptions = {
-      buildSpeed: 1.0,
-      onError: 'continue', // エラーが出ても続行
-      retryCount: 2,
-      useNearestChest: false,
-      bots: [bot]
-    };
-
-    await bot.builder.build(build, buildOptions);
-
-    return build.blocksPlaced || 0;
-  } catch (error) {
-    ctx.log?.(`建築エラー: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
- * JSON形式の建築（手動実装）
- */
-async function buildJsonFormat(bot, data, position, ctx, options) {
+  const data = schematic.data;
   const blocks = [];
 
   for (const block of data.blocks) {
@@ -250,40 +185,13 @@ async function buildJsonFormat(bot, data, position, ctx, options) {
  * @returns {Object} { size: Vec3, blockCount: number }
  */
 export function getSchematicInfo(schematic) {
-  if (!schematic) {
+  if (!schematic || schematic.type !== 'json') {
     return { size: new Vec3(0, 0, 0), blockCount: 0 };
   }
 
-  try {
-    // JSON形式
-    if (schematic.type === 'json') {
-      const data = schematic.data;
-      const size = new Vec3(data.size.x, data.size.y, data.size.z);
-      const blockCount = data.blocks.filter(b => b.block).length;
-      return { size, blockCount };
-    }
+  const data = schematic.data;
+  const size = new Vec3(data.size.x, data.size.y, data.size.z);
+  const blockCount = data.blocks.filter(b => b.block).length;
 
-    // .schem形式
-    const start = schematic.data.start();
-    const end = schematic.data.end();
-    const size = end.minus(start);
-
-    let blockCount = 0;
-
-    for (let y = start.y; y < end.y; y++) {
-      for (let z = start.z; z < end.z; z++) {
-        for (let x = start.x; x < end.x; x++) {
-          const pos = new Vec3(x, y, z);
-          const block = schematic.data.getBlock(pos);
-
-          if (block && block.name !== 'air' && block.name) blockCount++;
-        }
-      }
-    }
-
-    return { size, blockCount };
-  } catch (error) {
-    console.error('getSchematicInfo error:', error);
-    throw new Error(`設計書情報の取得に失敗: ${error.message}`);
-  }
+  return { size, blockCount };
 }
