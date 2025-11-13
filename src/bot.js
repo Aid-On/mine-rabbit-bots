@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createBot } from 'mineflayer';
 import pathfinderPlugin from 'mineflayer-pathfinder';
+import builderPlugin from 'mineflayer-builder';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import './env.js';
@@ -43,6 +44,7 @@ const bot = createBot({
 });
 
 bot.loadPlugin(pathfinder);
+bot.loadPlugin(builderPlugin);
 
 let mcDataGlobal = null;
 let jaDict = {};

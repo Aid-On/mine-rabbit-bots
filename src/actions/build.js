@@ -1,14 +1,14 @@
 export function register(bot, commandHandlers, ctx) {
-  // build <blockName> [front|back|left|right|up|down|near]
-  commandHandlers.set('build', ({ args, sender }) => {
+  // place <blockName> [front|back|left|right|up|down|near]
+  commandHandlers.set('place', ({ args, sender }) => {
     const blockName = args[0];
     const dirArg = (args[1] || 'front').toLowerCase();
     const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
 
     if (!blockName || hasHelp(args)) {
       bot.chat('設置: 所持ブロックを指定位置へ設置します。');
-      bot.chat('使用: build <blockName> [front back left right up down near]');
-      bot.chat('例: build cobblestone front / build oak_planks near');
+      bot.chat('使用: place <blockName> [front back left right up down near]');
+      bot.chat('例: place cobblestone front / place oak_planks near');
       return;
     }
 
