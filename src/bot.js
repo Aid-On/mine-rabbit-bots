@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { createBot } from 'mineflayer';
 import pathfinderPlugin from 'mineflayer-pathfinder';
-import { plugin as builderPlugin } from 'mineflayer-builder';
+import builderPkg from 'mineflayer-builder';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import './env.js';
+
+const { plugin: builderPlugin } = builderPkg;
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { registerActions } from './actions/index.js';
