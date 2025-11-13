@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createBot } from 'mineflayer';
 import pathfinderPlugin from 'mineflayer-pathfinder';
-import builderPlugin from 'mineflayer-builder';
+import { plugin as builderPlugin } from 'mineflayer-builder';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import './env.js';
