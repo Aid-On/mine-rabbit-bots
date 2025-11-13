@@ -6,7 +6,7 @@ import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import './env.js';
 
-const { builder: builderPlugin } = builderPkg;
+const builderPlugin = builderPkg.builder;
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { registerActions } from './actions/index.js';
