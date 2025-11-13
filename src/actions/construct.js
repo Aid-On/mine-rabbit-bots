@@ -62,7 +62,9 @@ export function register(bot, commandHandlers, ctx) {
         if (!check.hasAll) {
           bot.chat('材料が不足しています:');
           for (const [blockName, count] of Object.entries(check.missing)) {
-            bot.chat(`  ${ctx.getJaItemName(blockName)}: ${count}個不足`);
+            const available = check.available[blockName] || 0;
+            const required = materials[blockName] || 0;
+            bot.chat(`  ${ctx.getJaItemName(blockName)}: ${available}/${required} (${count}個不足)`);
           }
           bot.chat('材料を揃えてから再度実行してください');
           return;
