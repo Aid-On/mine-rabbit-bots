@@ -96,5 +96,6 @@
 - プレイヤーが作成したものをコミュニティから入手
 
 **注意**:
-- `.schem` 形式（WorldEdit 1.13+）は現在未対応です
-- `.schematic` （古い形式）と `.litematic` のみ対応しています
+- `.schematic` （MCEdit形式）に対応
+- `.schem` 形式（Sponge/WorldEdit 1.13+）に対応
+- `.litematic` 形式は未対応です（prismarine-schematicの制限）

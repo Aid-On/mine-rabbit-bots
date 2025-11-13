@@ -21,10 +21,10 @@ export function register(bot, commandHandlers, ctx) {
     const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
 
     if (hasHelp(args) || args.length === 0) {
-      bot.chat('建築: .schematic/.litematic ファイルから建物を建築します');
+      bot.chat('建築: .schematic/.schem ファイルから建物を建築します');
       bot.chat('使用: build <file> [north|south|east|west]');
       bot.chat('例: build house.schematic north');
-      bot.chat('例: build castle.litematic east');
+      bot.chat('例: build castle.schem east');
       bot.chat('設計書は schematics/ ディレクトリに配置してください');
       return;
     }
