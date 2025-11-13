@@ -17,12 +17,6 @@ export async function loadSchematic(bot, filePath) {
   try {
     const fileData = await readFile(filePath);
     const schematic = await Schematic.read(fileData, bot.version);
-
-    // デバッグ: schematicオブジェクトの構造を確認
-    console.log('Schematic loaded, type:', typeof schematic);
-    console.log('Schematic methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(schematic)));
-    console.log('Schematic keys:', Object.keys(schematic));
-
     return schematic;
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -56,19 +50,12 @@ export function getMaterialsFromSchematic(schematic, mcData) {
           const pos = new Vec3(x, y, z);
           const block = schematic.getBlock(pos);
 
-          if (!block || block.name === 'air') continue;
+          if (!block || block.name === 'air' || !block.name) continue;
 
-          const blockName = block.name || 'unknown';
-          if (!blockName || blockName === 'unknown') {
-            console.log('Unknown block at', pos, ':', block);
-          }
-
-          materials[blockName] = (materials[blockName] || 0) + 1;
+          materials[block.name] = (materials[block.name] || 0) + 1;
         }
       }
     }
-
-    console.log('Materials found:', materials);
   } catch (error) {
     console.error('getMaterialsFromSchematic error:', error);
     throw new Error(`材料計算に失敗: ${error.message}`);
