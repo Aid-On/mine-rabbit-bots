@@ -17,11 +17,18 @@ export async function loadSchematic(bot, filePath) {
   try {
     const fileData = await readFile(filePath);
     const schematic = await Schematic.read(fileData, bot.version);
+
+    // デバッグ: schematicオブジェクトの構造を確認
+    console.log('Schematic loaded, type:', typeof schematic);
+    console.log('Schematic methods:', Object.getOwnPropertyNames(Object.getPrototypeOf(schematic)));
+    console.log('Schematic keys:', Object.keys(schematic));
+
     return schematic;
   } catch (error) {
     if (error.code === 'ENOENT') {
       throw new Error(`設計書ファイルが見つかりません: ${filePath}`);
     }
+    console.error('loadSchematic error:', error);
     throw error;
   }
 }
