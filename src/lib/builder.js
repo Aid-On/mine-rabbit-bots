@@ -1,16 +1,16 @@
 /**
  * prismarine-schematic を使った建築機能
- * .schematic ファイルから建築を行う
+ * .schematic / .litematic ファイルから建築を行う
  */
 import { readFile } from 'fs/promises';
 import { Vec3 } from 'vec3';
 import { Schematic } from 'prismarine-schematic';
 
 /**
- * .schematic ファイルを読み込む
+ * .schematic / .litematic ファイルを読み込む
  * prismarine-schematic を使用
  * @param {Object} bot - mineflayer bot
- * @param {string} filePath - .schematic ファイルのパス
+ * @param {string} filePath - .schematic / .litematic ファイルのパス
  * @returns {Promise<Object>} schematic データ
  */
 export async function loadSchematic(bot, filePath) {
