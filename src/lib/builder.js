@@ -1,10 +1,11 @@
 /**
  * 建築機能
- * .schematic / .json ファイルから建築を行う
+ * mineflayer-schem / .json ファイルから建築を行う
  */
 import { readFile } from 'fs/promises';
 import { Vec3 } from 'vec3';
 import { Schematic } from 'prismarine-schematic';
+import { Build } from 'mineflayer-schem';
 
 /**
  * .schematic / .json ファイルを読み込む
@@ -118,49 +119,52 @@ export function checkMaterials(bot, materials) {
  * @returns {Promise<void>}
  */
 export async function buildSchematic(bot, schematic, position, ctx, options = {}) {
+  // JSON形式の場合は手動実装（後方互換）
+  if (schematic.type === 'json') {
+    return await buildJsonFormat(bot, schematic.data, position, ctx, options);
+  }
+
+  // .schem形式はmineflayer-schemに任せる
+  try {
+    if (!bot.builder) {
+      throw new Error('mineflayer-schemプラグインがロードされていません');
+    }
+
+    const build = new Build(schematic.data, bot.world, position);
+
+    const buildOptions = {
+      buildSpeed: 1.0,
+      onError: 'continue', // エラーが出ても続行
+      retryCount: 2,
+      useNearestChest: false,
+      bots: [bot]
+    };
+
+    await bot.builder.build(build, buildOptions);
+
+    return build.blocksPlaced || 0;
+  } catch (error) {
+    ctx.log?.(`建築エラー: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * JSON形式の建築（手動実装）
+ */
+async function buildJsonFormat(bot, data, position, ctx, options) {
   const blocks = [];
 
-  try {
-    // JSON形式
-    if (schematic.type === 'json') {
-      for (const block of schematic.data.blocks) {
-        if (!block.block) continue; // commentのみの行をスキップ
+  for (const block of data.blocks) {
+    if (!block.block) continue;
 
-        const worldPos = position.offset(block.x, block.y, block.z);
-        blocks.push({
-          x: worldPos.x,
-          y: worldPos.y,
-          z: worldPos.z,
-          name: block.block
-        });
-      }
-    } else {
-      // .schem形式
-      const start = schematic.data.start();
-      const end = schematic.data.end();
-
-      for (let y = start.y; y < end.y; y++) {
-        for (let z = start.z; z < end.z; z++) {
-          for (let x = start.x; x < end.x; x++) {
-            const pos = new Vec3(x, y, z);
-            const block = schematic.data.getBlock(pos);
-
-            if (!block || block.name === 'air' || !block.name) continue;
-
-            const worldPos = position.offset(x - start.x, y - start.y, z - start.z);
-            blocks.push({
-              x: worldPos.x,
-              y: worldPos.y,
-              z: worldPos.z,
-              name: block.name
-            });
-          }
-        }
-      }
-    }
-  } catch (error) {
-    console.error('buildSchematic error:', error);
-    throw new Error(`ブロック取得に失敗: ${error.message}`);
+    const worldPos = position.offset(block.x, block.y, block.z);
+    blocks.push({
+      x: worldPos.x,
+      y: worldPos.y,
+      z: worldPos.z,
+      name: block.block
+    });
   }
 
   // 下から上へソート
@@ -179,7 +183,10 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
       // アイテムを装備
       const item = bot.inventory.items().find(i => i.name === blockInfo.name);
       if (!item) {
-        throw new Error(`${blockInfo.name} が不足しています`);
+        ctx.log?.(`${blockInfo.name} が不足 (スキップ)`);
+        placed++;
+        if (options.onProgress) options.onProgress(placed, total);
+        continue;
       }
 
       // すでにブロックがある場合はスキップ
@@ -193,10 +200,23 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
       // 参照ブロックを探す
       const ref = ctx.findPlaceRefForTarget(targetPos);
       if (!ref) {
-        ctx.log?.(`${targetPos} に設置できません: 参照ブロックが見つかりません`);
         placed++;
         if (options.onProgress) options.onProgress(placed, total);
         continue;
+      }
+
+      // ブロックの近くまで移動
+      const distance = bot.entity.position.distanceTo(targetPos);
+      if (distance > 4) {
+        try {
+          await ctx.gotoBlock(targetPos);
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (moveError) {
+          // 移動失敗してもスキップ
+          placed++;
+          if (options.onProgress) options.onProgress(placed, total);
+          continue;
+        }
       }
 
       // ブロックを設置
@@ -207,25 +227,15 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
         await bot.placeBlock(ref.refBlock, ref.face);
         placed++;
         if (options.onProgress) options.onProgress(placed, total);
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 150));
       } catch (placeError) {
-        // タイムアウトエラーは無視して続行
-        if (placeError.message && placeError.message.includes('timeout')) {
-          ctx.log?.(`タイムアウト (続行): ${targetPos}`);
-          placed++;
-          if (options.onProgress) options.onProgress(placed, total);
-        } else {
-          ctx.log?.(`配置エラー: ${placeError.message}`);
-          placed++;
-          if (options.onProgress) options.onProgress(placed, total);
-        }
+        placed++;
+        if (options.onProgress) options.onProgress(placed, total);
       } finally {
         bot.setControlState('sneak', false);
       }
 
     } catch (error) {
-      ctx.log?.(`ブロック配置エラー: ${error.message}`);
-      // エラーが起きても続行
       placed++;
       if (options.onProgress) options.onProgress(placed, total);
     }

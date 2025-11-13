@@ -16,6 +16,7 @@
     "minecraft-data": "^3.99.1",
     "mineflayer": "^4.33.0",
     "mineflayer-pathfinder": "^2.4.5",
+    "mineflayer-schem": "file:../../../../../../private/tmp/mineflayer-schem",
     "pino": "^10.0.0",
     "prismarine-schematic": "^1.2.3",
     "vec3": "^0.1.10"

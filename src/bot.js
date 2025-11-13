@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { createBot } from 'mineflayer';
 import pathfinderPlugin from 'mineflayer-pathfinder';
+import builderPkg from 'mineflayer-schem';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import './env.js';
+
+const { builder: builderPlugin } = builderPkg;
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { registerActions } from './actions/index.js';
@@ -101,12 +104,15 @@ bot.once('spawn', () => {
 
   // プラグインをロード（spawn後にロードする必要がある）
   bot.loadPlugin(pathfinder);
+  bot.loadPlugin(builderPlugin);
 
   mcDataGlobal = minecraftData(bot.version);
   const defaultMove = new Movements(bot, mcDataGlobal);
   if (bot.pathfinder?.setMovements) {
     bot.pathfinder.setMovements(defaultMove);
   }
+
+  log('mineflayer-schemプラグインをロードしました');
 
   // 日本語辞書の読み込み（存在すれば）
   loadJaDict();
