@@ -45,8 +45,6 @@ const bot = createBot({
   auth: 'offline'
 });
 
-bot.loadPlugin(pathfinder);
-
 let mcDataGlobal = null;
 let jaDict = {};
 
@@ -104,13 +102,16 @@ bot.once('spawn', () => {
 
   bot.chat(`/say Bot ${bot.username} がオンラインになりました`);
 
+  // プラグインをロード（spawn後にロードする必要がある）
+  bot.loadPlugin(pathfinder);
+
   mcDataGlobal = minecraftData(bot.version);
   const defaultMove = new Movements(bot, mcDataGlobal);
   if (bot.pathfinder?.setMovements) {
     bot.pathfinder.setMovements(defaultMove);
   }
 
-  // builderプラグインをロード（spawn後にロードする必要がある）
+  // builderプラグインをロード
   try {
     bot.loadPlugin(builderPlugin);
     log('mineflayer-builderプラグインをロードしました');
