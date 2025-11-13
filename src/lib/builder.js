@@ -1,23 +1,30 @@
 /**
- * prismarine-schematic を使った建築機能
- * .schematic / .litematic ファイルから建築を行う
+ * 建築機能
+ * .schematic / .json ファイルから建築を行う
  */
 import { readFile } from 'fs/promises';
 import { Vec3 } from 'vec3';
 import { Schematic } from 'prismarine-schematic';
 
 /**
- * .schematic / .litematic ファイルを読み込む
- * prismarine-schematic を使用
+ * .schematic / .json ファイルを読み込む
  * @param {Object} bot - mineflayer bot
- * @param {string} filePath - .schematic / .litematic ファイルのパス
+ * @param {string} filePath - 設計書ファイルのパス
  * @returns {Promise<Object>} schematic データ
  */
 export async function loadSchematic(bot, filePath) {
   try {
     const fileData = await readFile(filePath);
+
+    // JSON形式かチェック
+    if (filePath.endsWith('.json')) {
+      const json = JSON.parse(fileData.toString());
+      return { type: 'json', data: json };
+    }
+
+    // .schem形式
     const schematic = await Schematic.read(fileData, bot.version);
-    return schematic;
+    return { type: 'schem', data: schematic };
   } catch (error) {
     if (error.code === 'ENOENT') {
       throw new Error(`設計書ファイルが見つかりません: ${filePath}`);
@@ -41,14 +48,24 @@ export function getMaterialsFromSchematic(schematic, mcData) {
   }
 
   try {
-    const start = schematic.start();
-    const end = schematic.end();
+    // JSON形式
+    if (schematic.type === 'json') {
+      const blocks = schematic.data.blocks.filter(b => b.block);
+      for (const block of blocks) {
+        materials[block.block] = (materials[block.block] || 0) + 1;
+      }
+      return materials;
+    }
+
+    // .schem形式
+    const start = schematic.data.start();
+    const end = schematic.data.end();
 
     for (let y = start.y; y < end.y; y++) {
       for (let z = start.z; z < end.z; z++) {
         for (let x = start.x; x < end.x; x++) {
           const pos = new Vec3(x, y, z);
-          const block = schematic.getBlock(pos);
+          const block = schematic.data.getBlock(pos);
 
           if (!block || block.name === 'air' || !block.name) continue;
 
@@ -104,24 +121,40 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
   const blocks = [];
 
   try {
-    const start = schematic.start();
-    const end = schematic.end();
+    // JSON形式
+    if (schematic.type === 'json') {
+      for (const block of schematic.data.blocks) {
+        if (!block.block) continue; // commentのみの行をスキップ
 
-    for (let y = start.y; y < end.y; y++) {
-      for (let z = start.z; z < end.z; z++) {
-        for (let x = start.x; x < end.x; x++) {
-          const pos = new Vec3(x, y, z);
-          const block = schematic.getBlock(pos);
+        const worldPos = position.offset(block.x, block.y, block.z);
+        blocks.push({
+          x: worldPos.x,
+          y: worldPos.y,
+          z: worldPos.z,
+          name: block.block
+        });
+      }
+    } else {
+      // .schem形式
+      const start = schematic.data.start();
+      const end = schematic.data.end();
 
-          if (!block || block.name === 'air') continue;
+      for (let y = start.y; y < end.y; y++) {
+        for (let z = start.z; z < end.z; z++) {
+          for (let x = start.x; x < end.x; x++) {
+            const pos = new Vec3(x, y, z);
+            const block = schematic.data.getBlock(pos);
 
-          const worldPos = position.offset(x - start.x, y - start.y, z - start.z);
-          blocks.push({
-            x: worldPos.x,
-            y: worldPos.y,
-            z: worldPos.z,
-            name: block.name
-          });
+            if (!block || block.name === 'air' || !block.name) continue;
+
+            const worldPos = position.offset(x - start.x, y - start.y, z - start.z);
+            blocks.push({
+              x: worldPos.x,
+              y: worldPos.y,
+              z: worldPos.z,
+              name: block.name
+            });
+          }
         }
       }
     }
@@ -199,8 +232,17 @@ export function getSchematicInfo(schematic) {
   }
 
   try {
-    const start = schematic.start();
-    const end = schematic.end();
+    // JSON形式
+    if (schematic.type === 'json') {
+      const data = schematic.data;
+      const size = new Vec3(data.size.x, data.size.y, data.size.z);
+      const blockCount = data.blocks.filter(b => b.block).length;
+      return { size, blockCount };
+    }
+
+    // .schem形式
+    const start = schematic.data.start();
+    const end = schematic.data.end();
     const size = end.minus(start);
 
     let blockCount = 0;
@@ -209,9 +251,9 @@ export function getSchematicInfo(schematic) {
       for (let z = start.z; z < end.z; z++) {
         for (let x = start.x; x < end.x; x++) {
           const pos = new Vec3(x, y, z);
-          const block = schematic.getBlock(pos);
+          const block = schematic.data.getBlock(pos);
 
-          if (block && block.name !== 'air') blockCount++;
+          if (block && block.name !== 'air' && block.name) blockCount++;
         }
       }
     }

@@ -1,5 +1,5 @@
 /**
- * construct アクション: .schematic / .litematic ファイルから建築を行う
+ * construct アクション: .schem / .json ファイルから建築を行う
  */
 import { loadSchematic, getMaterialsFromSchematic, checkMaterials, buildSchematic, getSchematicInfo } from '../lib/builder.js';
 import { resolve } from 'path';
@@ -21,9 +21,9 @@ export function register(bot, commandHandlers, ctx) {
     const hasHelp = (arr) => (arr || []).some(a => ['-h','--help','help','ヘルプ'].includes(String(a||'').toLowerCase()));
 
     if (hasHelp(args) || args.length === 0) {
-      bot.chat('建築: .schematic/.schem ファイルから建物を建築します');
+      bot.chat('建築: .json/.schem ファイルから建物を建築します');
       bot.chat('使用: build <file> [north|south|east|west]');
-      bot.chat('例: build house.schematic north');
+      bot.chat('例: build simple-house.json north');
       bot.chat('例: build castle.schem east');
       bot.chat('設計書は schematics/ ディレクトリに配置してください');
       return;
