@@ -7,6 +7,8 @@ import { Vec3 } from 'vec3';
 import './env.js';
 
 const builderPlugin = builderPkg.builder;
+console.log('builderPlugin type:', typeof builderPlugin);
+console.log('builderPlugin:', builderPlugin);
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { registerActions } from './actions/index.js';
