@@ -191,10 +191,27 @@ export function getSchematicInfo(schematic) {
     const end = schematic.end();
     const size = end.minus(start);
 
+    console.log('Schematic start:', start);
+    console.log('Schematic end:', end);
+    console.log('Schematic size:', size);
+    console.log('Has forEach?', typeof schematic.forEach);
+
     let blockCount = 0;
+    let airCount = 0;
+    let totalCalled = 0;
+
     schematic.forEach((block, pos) => {
-      if (block && block.name !== 'air') blockCount++;
+      totalCalled++;
+      if (block && block.name !== 'air') {
+        blockCount++;
+      } else {
+        airCount++;
+      }
     });
+
+    console.log('forEach called:', totalCalled, 'times');
+    console.log('Block count:', blockCount);
+    console.log('Air count:', airCount);
 
     return { size, blockCount };
   } catch (error) {
