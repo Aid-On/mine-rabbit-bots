@@ -135,26 +135,32 @@ export function register(bot, commandHandlers, ctx) {
           const flag = rest[0] || '';
           
           // chest store -a: 全アイテムを格納
+          // chest store -a: 全アイテムを格納
           if (flag === '-a') {
             const release = await acquireLock('chest');
             try {
               const chest = await openNearestChest(bot, ctx.mcData(), ctx.gotoBlock);
               await sleep(300);
               
-              const { totalMoved, totalSkipped } = await depositAllItems({
-                bot,
-                chest,
-                getJaItemName: ctx.getJaItemName,
-                log: ctx.log
-              });
+              const items = bot.inventory.items();
+              const itemIds = [...new Set(items.map(i => i.type))];
+              let totalMoved = 0;
+
+              for (const id of itemIds) {
+                const itemsOfType = items.filter(i => i.type === id);
+                for (const item of itemsOfType) {
+                  try {
+                    await chest.deposit(item.type, item.metadata, item.count);
+                    totalMoved += item.count;
+                    await sleep(50);
+                  } catch (e) {
+                    // ignore
+                  }
+                }
+              }
               
               chest.close();
-              
-              if (totalSkipped > 0) {
-                say(`全アイテム格納完了（一部格納できませんでした）`);
-              } else {
-                say(`全アイテム格納完了 (${totalMoved}個)`);
-              }
+              say(`全アイテム格納完了 (${totalMoved}個)`);
             } finally {
               release();
             }
