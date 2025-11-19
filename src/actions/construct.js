@@ -10,7 +10,13 @@ export function register(bot, commandHandlers, ctx) {
   const buildState = {
     isBuilding: false,
     currentSchematic: null,
-    currentFile: null
+    currentFile: null,
+    last: null, // { schematic, file, pos, facing }
+    // 自動監視
+    watchEnabled: false,
+    watchIntervalMs: 60000,
+    watchTimer: null,
+    isRepairing: false
   };
 
   /**
@@ -82,6 +88,7 @@ export function register(bot, commandHandlers, ctx) {
         // 建築実行
         await buildSchematic(bot, schematic, buildPos, ctx, {
           facing,
+          shouldCancel: () => !buildState.isBuilding,
           onProgress: (placed, total) => {
             if (placed % 10 === 0 || placed === total) {
               ctx.log?.(`建築進捗: ${placed}/${total} (${Math.floor((placed/total)*100)}%)`);
@@ -89,10 +96,23 @@ export function register(bot, commandHandlers, ctx) {
           }
         });
 
-        bot.chat(`建築完了: ${fileName}`);
+        const wasCanceled = !buildState.isBuilding;
+        if (wasCanceled) {
+          bot.chat(`建築を中断しました: ${fileName}`);
+        } else {
+          bot.chat(`建築完了: ${fileName}`);
+        }
         buildState.isBuilding = false;
         buildState.currentSchematic = null;
         buildState.currentFile = null;
+        // 記録: 後で検査/修復を再実行できるように保存
+        if (!wasCanceled) {
+          buildState.last = { schematic, file: fileName, pos: buildPos.clone(), facing };
+        }
+        // ウォッチが有効なら起動
+        if (buildState.watchEnabled && !buildState.watchTimer) {
+          startWatch();
+        }
 
       } catch (error) {
         ctx.log?.(`建築エラー: ${error.message}`);
@@ -155,15 +175,114 @@ export function register(bot, commandHandlers, ctx) {
   });
 
   /**
+   * buildrepair - 直前の建築位置を検査して不足/誤設置を修復
+   */
+  commandHandlers.set('buildrepair', ({ args, sender }) => {
+    if (buildState.isBuilding) {
+      bot.chat('建築中のため修復は実行できません');
+      return;
+    }
+    const last = buildState.last;
+    if (!last || !last.schematic || !last.pos) {
+      bot.chat('直前の建築情報がありません。先に build を実行してください');
+      return;
+    }
+    (async () => {
+      try {
+        buildState.isRepairing = true;
+        bot.chat(`修復を開始: ${last.file} の建築位置を検査中...`);
+        await buildSchematic(bot, last.schematic, last.pos, ctx, {
+          facing: last.facing || 'north',
+          shouldCancel: () => !buildState.isRepairing,
+          onProgress: (p, t) => { if (p % 10 === 0 || p === t) ctx.log?.(`修復進捗: ${p}/${t}`); }
+        });
+        bot.chat('修復完了');
+      } catch (error) {
+        ctx.log?.(`修復エラー: ${error.message}`);
+        bot.chat(`修復エラー: ${error.message}`);
+      } finally {
+        buildState.isRepairing = false;
+      }
+    })();
+  });
+
+  // 内部: 直前建築に対する検査・修復を実行（重複防止）
+  const runRepairAtLast = async () => {
+    if (buildState.isRepairing || buildState.isBuilding) return;
+    const last = buildState.last;
+    if (!last || !last.schematic || !last.pos) return;
+    buildState.isRepairing = true;
+    try {
+      await buildSchematic(bot, last.schematic, last.pos, ctx, {
+        facing: last.facing || 'north',
+        onProgress: (p, t) => { if (p === t) ctx.log?.('自動監視: 修復パス完了'); }
+      });
+    } catch (e) {
+      ctx.log?.(`自動監視エラー: ${e.message}`);
+    } finally {
+      buildState.isRepairing = false;
+    }
+  };
+
+  const startWatch = () => {
+    if (buildState.watchTimer) return;
+    buildState.watchTimer = setInterval(runRepairAtLast, buildState.watchIntervalMs);
+    try { bot.chat(`自動監視を開始: 間隔 ${Math.floor(buildState.watchIntervalMs/1000)} 秒`); } catch (_) {}
+  };
+  const stopWatch = () => {
+    if (buildState.watchTimer) {
+      clearInterval(buildState.watchTimer);
+      buildState.watchTimer = null;
+    }
+    try { bot.chat('自動監視を停止'); } catch (_) {}
+  };
+
+  /**
+   * buildwatch <start|stop|status> [intervalSec]
+   *  直前建築の位置を定期的に検査・修復します
+   */
+  commandHandlers.set('buildwatch', ({ args, sender }) => {
+    const sub = (args[0]||'').toLowerCase();
+    if (!sub || ['-h','--help','help','ヘルプ'].includes(sub)) {
+      bot.chat('使用: buildwatch <start|stop|status> [intervalSec]');
+      return;
+    }
+    if (sub === 'status') {
+      const st = buildState.watchTimer ? 'running' : (buildState.watchEnabled ? 'enabled' : 'disabled');
+      bot.chat(`自動監視: ${st}, 間隔 ${Math.floor(buildState.watchIntervalMs/1000)} 秒`);
+      return;
+    }
+    if (sub === 'start') {
+      const sec = Number(args[1]||'');
+      if (!Number.isNaN(sec) && sec > 1) buildState.watchIntervalMs = sec*1000;
+      buildState.watchEnabled = true;
+      startWatch();
+      return;
+    }
+    if (sub === 'stop') {
+      buildState.watchEnabled = false;
+      stopWatch();
+      return;
+    }
+    bot.chat('使用: buildwatch <start|stop|status> [intervalSec]');
+  });
+
+  /**
    * buildstop - 建築を中断
    */
   commandHandlers.set('buildstop', ({ args, sender }) => {
     if (!buildState.isBuilding) {
+      // 建築していない場合は修復の中断を試みる
+      if (buildState.isRepairing) {
+        buildState.isRepairing = false;
+        bot.chat('修復を中断しました');
+        return;
+      }
       bot.chat('建築中ではありません');
       return;
     }
 
-    bot.chat(`建築を中断しました: ${buildState.currentFile || ''}`);
+    bot.chat(`建築を中断します: ${buildState.currentFile || ''}`);
     buildState.isBuilding = false;
     buildState.currentSchematic = null;
     buildState.currentFile = null;

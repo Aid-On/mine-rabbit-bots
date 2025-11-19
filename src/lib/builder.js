@@ -88,6 +88,7 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
   }
 
   const data = schematic.data;
+  const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false;
   const blocks = [];
 
   for (const block of data.blocks) {
@@ -111,7 +112,87 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
   let placed = 0;
   const total = blocks.length;
 
+  const posKey = (p) => `${p.x},${p.y},${p.z}`;
+  const plannedSet = new Set(blocks.map(b => `${b.x},${b.y},${b.z}`));
+  // マルチブロック（ドア上部など）で設計上は暗黙に必要になる座標をホワイトリスト
+  const plannedExtraSet = new Set();
+  for (const b of blocks) {
+    try {
+      const name = String(b.name || '').toLowerCase();
+      if (name.endsWith('_door')) {
+        plannedExtraSet.add(`${b.x},${b.y+1},${b.z}`);
+      }
+    } catch (_) {}
+  }
+
+  // 設置したスライム足場を記録
+  const scaffoldList = [];
+
+  // 指定したブロック名が確実に手に持たれているかを確認して装備
+  const ensureHeldItem = async (blockName) => {
+    const tryEquip = async () => {
+      const it = bot.inventory.items().find(i => i.name === blockName);
+      if (!it) return false;
+      try { await bot.equip(it, 'hand'); } catch (_) { return false; }
+      await new Promise(r => setTimeout(r, 50));
+      return bot.heldItem && bot.heldItem.name === blockName;
+    };
+    if (await tryEquip()) return true;
+    // リトライ1回
+    await new Promise(r => setTimeout(r, 80));
+    return await tryEquip();
+  };
+
+  // 掘削ヘルパー（適切なツール・移動込み）
+  const digAt = async (pos) => {
+    try {
+      if (ctx.gotoBlockAndDig) {
+        await ctx.gotoBlockAndDig(pos);
+      } else {
+        try { if (ctx.gotoBlock) await ctx.gotoBlock(pos); } catch (_) {}
+        const b = bot.blockAt(pos);
+        if (b && b.name !== 'air') await bot.dig(b);
+      }
+      await new Promise(r => setTimeout(r, 120));
+    } catch (_) {}
+  };
+
+  const tryScaffoldWithSlime = async (targetPos) => {
+    const slime = bot.inventory.items().find(i => i.name === 'slime_block');
+    if (!slime) { ctx.log?.('足場が必要ですが slime_block が在庫にありません'); return { ok: false };
+    }
+
+    const dirs = [
+      new Vec3(0, -1, 0), new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, 1, 0)
+    ];
+
+    for (const dir of dirs) {
+      const sPos = targetPos.minus(dir);
+      const b = bot.blockAt(sPos);
+      if (b && b.name !== 'air') continue;
+      const sRef = ctx.findPlaceRefForTarget(sPos);
+      if (!sRef) continue;
+
+      try {
+        await bot.equip(slime, 'hand');
+        bot.setControlState('sneak', true);
+        await bot.placeBlock(sRef.refBlock, sRef.face);
+        await new Promise(r => setTimeout(r, 120));
+        // 記録しておく（後で回収）
+        scaffoldList.push(sPos.clone());
+        ctx.log?.(`足場を設置: slime_block @ ${sPos.x},${sPos.y},${sPos.z}`);
+        return { ok: true, scaffoldPos: sPos };
+      } catch (_) {
+        // try next dir
+      } finally {
+        bot.setControlState('sneak', false);
+      }
+    }
+    return { ok: false };
+  };
+
   for (const blockInfo of blocks) {
+    if (shouldCancel()) break;
     try {
       const targetPos = new Vec3(blockInfo.x, blockInfo.y, blockInfo.z);
 
@@ -132,8 +213,16 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
         continue;
       }
 
-      // 参照ブロックを探す
-      const ref = ctx.findPlaceRefForTarget(targetPos);
+      // 参照ブロックを探す（なければスライムで足場）
+      let ref = ctx.findPlaceRefForTarget(targetPos);
+      let scaffoldPos = null;
+      if (!ref) {
+        const s = await tryScaffoldWithSlime(targetPos);
+        if (s.ok) {
+          scaffoldPos = s.scaffoldPos;
+          ref = ctx.findPlaceRefForTarget(targetPos);
+        }
+      }
       if (!ref) {
         placed++;
         if (options.onProgress) options.onProgress(placed, total);
@@ -141,6 +230,7 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
       }
 
       // ブロックの近くまで移動
+      if (shouldCancel()) break;
       const distance = bot.entity.position.distanceTo(targetPos);
       if (distance > 4) {
         try {
@@ -155,7 +245,14 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
       }
 
       // ブロックを設置
-      await bot.equip(item, 'hand');
+      if (shouldCancel()) break;
+      const okEquip = await ensureHeldItem(blockInfo.name);
+      if (!okEquip) {
+        // 装備に失敗した場合はスキップ
+        placed++;
+        if (options.onProgress) options.onProgress(placed, total);
+        continue;
+      }
       bot.setControlState('sneak', true);
 
       try {
@@ -170,9 +267,173 @@ export async function buildSchematic(bot, schematic, position, ctx, options = {}
         bot.setControlState('sneak', false);
       }
 
+      // 足場の後片付け（その場で回収。設計に含まれない位置のみ）
+      if (shouldCancel()) break;
+      if (scaffoldPos && !plannedSet.has(posKey(scaffoldPos))) {
+        const sBlock = bot.blockAt(scaffoldPos);
+        if (sBlock && sBlock.name === 'slime_block') {
+          await digAt(scaffoldPos);
+        }
+      }
+
     } catch (error) {
       placed++;
       if (options.onProgress) options.onProgress(placed, total);
+    }
+  }
+
+  // 検査＆修復パス: 設計と違う/穴が空いている箇所を修正
+  for (const blockInfo of blocks) {
+    if (shouldCancel()) break;
+    try {
+      const targetPos = new Vec3(blockInfo.x, blockInfo.y, blockInfo.z);
+      const desired = blockInfo.name;
+
+      const haveItem = bot.inventory.items().find(i => i.name === desired);
+      if (!haveItem) continue;
+
+      let worldBlock = bot.blockAt(targetPos);
+      if (worldBlock && worldBlock.name === desired) continue; // OK
+
+      // 異種ブロックなら撤去（適したツールで掘削）
+      if (worldBlock && worldBlock.name !== 'air' && worldBlock.name !== desired) {
+        try {
+          if (ctx.gotoBlockAndDig) {
+            await ctx.gotoBlockAndDig(targetPos);
+          } else {
+            try { if (ctx.gotoBlock) await ctx.gotoBlock(targetPos); } catch (_) {}
+            await bot.dig(worldBlock);
+          }
+          await new Promise(r => setTimeout(r, 120));
+        } catch (_) {
+          // 掘れなければ諦め
+          continue;
+        }
+      }
+
+      // 参照ブロック確保
+      let ref = ctx.findPlaceRefForTarget(targetPos);
+      let scaffoldPos = null;
+      if (!ref) {
+        const s = await tryScaffoldWithSlime(targetPos);
+        if (s.ok) {
+          scaffoldPos = s.scaffoldPos;
+          ref = ctx.findPlaceRefForTarget(targetPos);
+        }
+      }
+      if (!ref) continue;
+
+      // 近くへ移動
+      if (shouldCancel()) break;
+      const distance = bot.entity.position.distanceTo(targetPos);
+      if (distance > 4) {
+        try { await ctx.gotoBlock(targetPos); await new Promise(r => setTimeout(r, 100)); } catch (_) { continue; }
+      }
+
+      // 置く
+      if (shouldCancel()) break;
+      try {
+        const okEquip2 = await ensureHeldItem(desired);
+        if (!okEquip2) continue;
+        bot.setControlState('sneak', true);
+        await bot.placeBlock(ref.refBlock, ref.face);
+        await new Promise(r => setTimeout(r, 150));
+      } catch (_) {
+        // ignore
+      } finally {
+        bot.setControlState('sneak', false);
+      }
+
+      // 足場があれば可能なら即回収
+      if (scaffoldPos && !plannedSet.has(posKey(scaffoldPos))) {
+        const sBlock = bot.blockAt(scaffoldPos);
+        if (sBlock && sBlock.name === 'slime_block') {
+          await digAt(scaffoldPos);
+        }
+      }
+
+    } catch (_) { /* ignore */ }
+  }
+
+  // 修正時に置いた足場が残っていればここでも回収
+  for (const sPos of scaffoldList) {
+    if (shouldCancel()) break;
+    try {
+      if (plannedSet.has(posKey(sPos))) continue;
+      const b = bot.blockAt(sPos);
+      if (!b || b.name !== 'slime_block') continue;
+      await digAt(sPos);
+    } catch (_) {}
+  }
+
+  // 最終回収パス: 残っている足場スライムを回収
+  for (const sPos of scaffoldList) {
+    if (shouldCancel()) break;
+    try {
+      if (plannedSet.has(posKey(sPos))) continue; // 設計に含まれる位置は触らない
+      const b = bot.blockAt(sPos);
+      if (!b || b.name !== 'slime_block') continue;
+      await digAt(sPos);
+    } catch (_) {}
+  }
+
+  // 追加回収/清掃: 設計範囲+周囲1を走査
+  //  - 残存するスライム足場を除去
+  //  - 設計外の余分なブロック（設計範囲内）の除去
+  if (!shouldCancel()) {
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (const b of blocks) {
+      if (b.x < minX) minX = b.x; if (b.x > maxX) maxX = b.x;
+      if (b.y < minY) minY = b.y; if (b.y > maxY) maxY = b.y;
+      if (b.z < minZ) minZ = b.z; if (b.z > maxZ) maxZ = b.z;
+    }
+    for (let x = minX-1; x <= maxX+1 && !shouldCancel(); x++) {
+      for (let y = minY; y <= maxY+1 && !shouldCancel(); y++) {
+        for (let z = minZ-1; z <= maxZ+1 && !shouldCancel(); z++) {
+          const p = new Vec3(x,y,z);
+          const wb = bot.blockAt(p);
+          if (wb && wb.name === 'slime_block' && !plannedSet.has(posKey(p))) {
+            await digAt(p);
+          }
+          // 設計範囲内の余分なブロックを除去（air 以外で設計外）
+          const inPlannedBox = (x >= minX && x <= maxX && y >= minY && y <= maxY && z >= minZ && z <= maxZ);
+          if (inPlannedBox && wb && wb.name !== 'air' && !plannedSet.has(posKey(p)) && !plannedExtraSet.has(posKey(p))) {
+            // スライムは上で除去済み。その他の異物を除去
+            await digAt(p);
+          }
+        }
+      }
+    }
+  }
+
+  // 最終: 足場除去で置けるようになった穴があればもう一度だけ修復試行
+  if (!shouldCancel()) {
+    for (const blockInfo of blocks) {
+      if (shouldCancel()) break;
+      try {
+        const targetPos = new Vec3(blockInfo.x, blockInfo.y, blockInfo.z);
+        const desired = blockInfo.name;
+        const haveItem = bot.inventory.items().find(i => i.name === desired);
+        if (!haveItem) continue;
+        const worldBlock = bot.blockAt(targetPos);
+        if (worldBlock && worldBlock.name === desired) continue;
+        if (worldBlock && worldBlock.name !== 'air') continue; // 異物除去は前段で対応済み
+        // 参照
+        let ref = ctx.findPlaceRefForTarget(targetPos);
+        if (!ref) {
+          const s = await tryScaffoldWithSlime(targetPos);
+          if (s.ok) ref = ctx.findPlaceRefForTarget(targetPos);
+        }
+        if (!ref) continue;
+        try { if (ctx.gotoBlock) await ctx.gotoBlock(targetPos); } catch (_) { continue; }
+        try {
+          await bot.equip(haveItem, 'hand');
+          bot.setControlState('sneak', true);
+          await bot.placeBlock(ref.refBlock, ref.face);
+        } catch (_) { } finally { bot.setControlState('sneak', false); }
+        await new Promise(r => setTimeout(r, 120));
+      } catch (_) {}
     }
   }
 

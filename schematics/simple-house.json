@@ -62,6 +62,9 @@
     { "x": 4, "y": 2, "z": 2, "block": "cobblestone" },
     { "x": 4, "y": 2, "z": 3, "block": "cobblestone" },
 
+    { "comment": "ドア (オーク) - 前面中央の開口に設置 (下部のみ指定。上部は自動設置)" },
+    { "x": 2, "y": 1, "z": 0, "block": "oak_door" },
+
     { "comment": "屋根 (オークの板材)" },
     { "x": 0, "y": 3, "z": 0, "block": "oak_planks" },
     { "x": 1, "y": 3, "z": 0, "block": "oak_planks" },
