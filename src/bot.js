@@ -7,6 +7,7 @@ import './env.js';
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { registerActions } from './actions/index.js';
+import { releaseLock, lockAge } from './lib/utils.js';
 import { craftWithAuto as libCraftWithAuto } from './lib/crafting.js';
 import { smeltAuto as libSmeltAuto, openOrApproachFurnace as libOpenOrApproachFurnace, ensureFuelInFurnace as libEnsureFuelInFurnace, smeltSources as libSmeltSources } from './lib/furnace.js';
 import { invCountById as libInvCountById, itemNameById as libItemNameById, invCountByName as libInvCountByName } from './lib/inventory.js';
@@ -112,6 +113,57 @@ bot.once('spawn', () => {
   loadJaDict();
 
   // 食事ロジックは actions/eat.js に移動（spawn 後に自動開始）
+
+  // ===== ウォッチドッグ（放置で固まる対策） =====
+  try {
+    let lastWindowAt = null;
+    let lastMovedAt = Date.now();
+    let lastPos = bot.entity.position.clone();
+    bot.on('windowOpen', () => { lastWindowAt = Date.now(); });
+    bot.on('windowClose', () => { lastWindowAt = null; });
+    bot.on('physicTick', () => {
+      const p = bot.entity.position;
+      if (p && lastPos && p.distanceTo(lastPos) > 0.3) {
+        lastMovedAt = Date.now();
+        lastPos = p.clone();
+      }
+    });
+
+    const watchdog = setInterval(() => {
+      const now = Date.now();
+      // 1) 長時間開いているウィンドウを自動クローズ
+      try {
+        if (bot.currentWindow && lastWindowAt && (now - lastWindowAt > 30000)) {
+          log('watchdog: 長時間ウィンドウが開いているため閉じます');
+          bot.closeWindow(bot.currentWindow);
+          lastWindowAt = null;
+        }
+      } catch (_) {}
+
+      // 2) パス移動が進んでいない場合は目標を解除
+      try {
+        const hasGoal = !!(bot.pathfinder && bot.pathfinder.goal);
+        if (hasGoal && (now - lastMovedAt > 120000)) {
+          log('watchdog: 移動が停滞しているため目標を解除');
+          bot.pathfinder?.setGoal?.(null);
+          lastMovedAt = now;
+        }
+      } catch (_) {}
+
+      // 3) ロックの強制解除（60秒以上のロック）
+      try {
+        const age = lockAge('chest');
+        if (age != null && age > 60000) {
+          log('watchdog: chest ロックが長時間保持のため解除');
+          releaseLock('chest');
+        }
+      } catch (_) {}
+    }, 15000);
+
+    bot.once('end', () => clearInterval(watchdog));
+  } catch (e) {
+    log(`watchdog 初期化失敗: ${e?.message || e}`);
+  }
 });
 
 const state = {
